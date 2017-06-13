@@ -18,6 +18,7 @@ sub <val> <dst>   sub value from <dst>
 
 <src> and <dst> can be a register name, a <value>, or *<value>.
 *<src> means the contents of RAM at the address <src>.
+*<reg> means the contents of RAM at the location referenced by reg.
 You cannot move values from one RAM location to another.
 <value> can be given in decimal or hexidecimal.
 <val> can be a literal value or a register name.
@@ -55,7 +56,6 @@ RAM_SIZE = 1024
 # Time to delay between executing instructions, in seconds.
 DELAY_BETWEEN_INSTRUCTIONS = 0.2
 
-
 class RAM:
     def __init__(self, size=RAM_SIZE):
         self._minAddr = 0
@@ -79,16 +79,22 @@ class CPU(threading.Thread):
         threading.Thread.__init__(self)
 
         self._num = num   # unique ID of this cpu
-        # Initialize registers
-        self._reg0 = 0
-        self._reg1 = 0
-        self._reg2 = 0
-        self._pc = 0
+        self._registers = {
+            'reg0' : 0,
+            'reg1' : 0,
+            'reg2' : 0,
+            'pc': 0
+            }
+
         self._ram = None
         self._os = None
 
+    def isregister(self, s):
+        return s in ('reg0', 'reg1', 'reg2', 'pc')
+
     def set_pc(self, pc):
-        self._pc = pc		# TODO: check this?
+        # TODO: check if value of pc is good?
+        self._registers['pc'] = pc
 
     def add_ram(self, ram):
         self._ram = ram
@@ -99,13 +105,15 @@ class CPU(threading.Thread):
 
     def __str__(self):
         res = '''CPU %d: pc %d, reg0 %d, reg1 %d, reg2 %d''' % \
-              (self._num, self._pc, self._reg0, self._reg1, self._reg2)
+              (self._num, self._registers['pc'], self._registers['reg0'],
+               self._registers['reg1'], self._registers['reg2'])
         return res
 
     def run(self):
         while True:
-            print("Executing code at [%d]: %s" % (self._pc, self._ram[self._pc]))
-            if not self.parse_instruction(self._ram[self._pc]):
+            print("Executing code at [%d]: %s" % (self._registers['pc'],
+                                                  self._ram[self._registers['pc']]))
+            if not self.parse_instruction(self._ram[self._registers['pc']]):
                 # False means an error occurred or the program ended, so return
                 return
             print(self)
@@ -122,9 +130,6 @@ class CPU(threading.Thread):
             
         instr = instr.replace(",", "")
         words = instr.split()
-#         if words[0].endswith(":"):
-#            # label  -- TODO: not sure what to do about this now...
-#            words = words[1:]   # remove label and continue
         instr = words[0]
         if len(words) == 2:
             dst = words[1]    # for jmp and call.
@@ -137,16 +142,16 @@ class CPU(threading.Thread):
             # call fname.  Function fname is a method in 
             # CalOS class and is called with the values in reg0, reg1, and reg2.
             self.handle_call(dst)
-            self._pc += 2
+            self._registers['pc'] += 2
         elif instr == "mov":
             self.handle_mov(src, dst)
-            self._pc += 2
+            self._registers['pc'] += 2
         elif instr == 'add':
             self.handle_add(src, dst)
-            self._pc += 2
+            self._registers['pc'] += 2
         elif instr == 'sub':
             self.handle_sub(src, dst)
-            self._pc += 2
+            self._registers['pc'] += 2
         elif instr == 'jez':
             self.handle_jez(src, dst)
         elif instr == 'jnz':
@@ -164,39 +169,43 @@ class CPU(threading.Thread):
 
     # TODO: do error checking in all these.
     def handle_jmp(self, dst):
-        self._pc = eval(dst)
+        self._registers['pc'] = eval(dst)
+        
     def handle_jez(self, src, dst):
-        if (src == 'reg0' and self._reg0 == 0) or \
-           (src == 'reg1' and self._reg1 == 0) or \
-           (src == 'reg2' and self._reg2 == 0) or \
-           (src == 'pc' and self._pc == 0):
-            self._pc = eval(dst)
+        if not self.isregister(src):
+            print("Illegal instruction")
+            return
+        if self._registers[src] == 0:
+            self._registers['pc'] = eval(dst)
         else:
-            self._pc += 2
+            self._registers['pc'] += 2
+            
     def handle_jnz(self, src, dst):
-        if (src == 'reg0' and self._reg0 != 0) or \
-           (src == 'reg1' and self._reg1 != 0) or \
-           (src == 'reg2' and self._reg2 != 0) or \
-           (src == 'pc' and self._pc != 0):
-            self._pc = eval(dst)
+        if not self.isregister(src):
+            print("Illegal instruction")
+            return
+        if self._registers[src] != 0:
+            self._registers['pc'] = eval(dst)
         else:
-            self._pc += 2
+            self._registers['pc'] += 2
+            
     def handle_jlz(self, src, dst):
-        if (src == 'reg0' and self._reg0 < 0) or \
-           (src == 'reg1' and self._reg1 < 0) or \
-           (src == 'reg2' and self._reg2 < 0) or \
-           (src == 'pc' and self._pc < 0):
-            self._pc = eval(dst)
+        if not self.isregister(src):
+            print("Illegal instruction")
+            return
+        if self._registers[src] < 0:
+            self._registers['pc'] = eval(dst)
         else:
-            self._pc += 2
+            self._registers['pc'] += 2
+            
     def handle_jgz(self, src, dst):
-        if (src == 'reg0' and self._reg0 > 0) or \
-           (src == 'reg1' and self._reg1 > 0) or \
-           (src == 'reg2' and self._reg2 > 0) or \
-           (src == 'pc' and self._pc > 0):
-            self._pc = eval(dst)
+        if not self.isregister(src):
+            print("Illegal instruction")
+            return
+        if self._registers[src] > 0:
+            self._registers['pc'] = eval(dst)
         else:
-            self._pc += 2
+            self._registers['pc'] += 2
 
     def _get_value_at(self, addr):
         '''addr is "*<someval>".  return the value from
@@ -205,241 +214,70 @@ class CPU(threading.Thread):
         addr = eval(addr[1:])
         return self._ram[addr]
 
+    def _get_srcval(self, src):
+        if self.isregister(src):
+            return self._registers[src]
+        elif src[0] == '*':
+            return self._get_value_at(src)
+        else:   # assume src holds a literal value
+            return eval(src)    # handles decimal and hex values.
+            # TODO: does the above handle putting strings in memory too?  It should
+            # allow single characters, perhaps.
+
+
     def handle_mov(self, src, dst):
-        if dst == 'reg0':
-            if src == 'reg0':
-                pass   # no op, essentially
-            elif src == 'reg1':
-                self._reg0 = self._reg1
-            elif src == 'reg2':
-                self._reg0 = self._reg2
-            elif src == 'pc':
-                self._reg0 = self._pc
-            elif src[0] == '*':
-                # TODO: check validity of address.
-                self._reg0 = self._get_value_at(src)
+        '''move value from a src to a dst.  src can be one of:
+        literal value:          5
+        value in memory:        *4
+        value in register:      reg2
+        dst can be one of:
+        memory location:        4
+        register name:          reg1
+        memory location in reg: *reg1
+        You cannot mov a value from RAM into RAM: you must use
+        a register.
+        '''
+        srcval = self._get_srcval(src)
+
+        if self.isregister(dst):
+            self._registers[dst] = srcval
+        elif dst[0] == '*':    # for *<register>
+            if self.isregister(dst[1:]):
+                self._ram[self._registers[dst[1:]]] = srcval
             else:
-                # Assume it is a literal value
-                self._reg0 = eval(src)   # handles decimal and hex values.
-        elif dst == 'reg1':
-            if src == 'reg0':
-                self._reg1 = self._reg0
-            elif src == 'reg1':
-                pass
-            elif src == 'reg2':
-                self._reg1 = self._reg2
-            elif src == 'pc':
-                self._reg1 = self._pc
-            elif src[0] == '*':
-                self._reg1 = self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg1 = eval(src)   # handles decimal and hex values.
-        elif dst == 'reg2':
-            if src == 'reg0':
-                self._reg2 = self._reg0
-            elif src == 'reg1':
-                self._reg2 = self._reg1
-            elif src == 'reg2':
-                pass
-            elif src == 'pc':
-                self._reg2 = self._pc
-            elif src[0] == '*':
-                self._reg2 = self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg2 = eval(src)   # handles decimal and hex values.
-        elif dst == 'pc':
-            if src == 'reg0':
-                self._pc = self._reg0
-            elif src == 'reg1':
-                self._pc = self._reg1
-            elif src == 'reg2':
-                self._pc = self._reg2
-            elif src == 'pc':
-                pass
-            elif src[0] == '*':
-                self._pc = self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._pc = eval(src)   # handles decimal and hex values.                
-        elif dst[0] == '*':
-            print("ERROR: cannot assign to a location referred to by a location in RAM")
-        else:
-            dst = int(eval(dst))
-            # Unique operation here: literal value for dst
-            # means the address, which we can move a value to.
-            if src == 'reg0':
-                self._ram[dst] = self._reg0
-            elif src == 'reg1':
-                self._ram[dst] = self._reg1
-            elif src == 'reg2':
-                self._ram[dst] = self._reg2
-            elif src == 'pc':
-                self._ram[dst] = pc
-            elif src[0] == '*':
-                # Illegal: cannot move from ram to ram
-                print("ERROR: cannot move value from RAM to RAM")
-            else:
-                # Assume it is a literal value
-                self._ram[dst] = eval(src)   # handles decimal and hex values.
+                print("Illegal instruction")
+                return
+        else:   # assume dst holds a literal value
+            self._ram[eval(dst)] = srcval
 
     def handle_add(self, src, dst):
-        if dst == 'reg0':
-            if src == 'reg0':
-                self._reg0 += self._reg0
-            elif src == 'reg1':
-                self._reg0 += self._reg1
-            elif src == 'reg2':
-                self._reg0 += self._reg2
-            elif src == 'pc':
-                self._reg0 += self._pc
-            elif src[0] == '*':
-                self._reg0 += self._get_value_at(src)
+        srcval = self._get_srcval(src)
+
+        if self.isregister(dst):
+            self._registers[dst] += srcval
+        elif dst[0] == '*':    # for *<register>
+            if self.isregister(dst[1:]):
+                self._ram[self._registers[dst[1:]]] += srcval
             else:
-                # Assume it is a literal value
-                self._reg0 += eval(src)   # handles decimal and hex values.
-        elif dst == 'reg1':
-            if src == 'reg0':
-                self._reg1 += self._reg0
-            elif src == 'reg1':
-                self._reg1 += self._reg1
-            elif src == 'reg2':
-                self._reg1 += self._reg2
-            elif src == 'pc':
-                self._reg1 += self._pc
-            elif src[0] == '*':
-                self._reg1 += self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg1 += eval(src)   # handles decimal and hex values.
-        elif dst == 'reg2':
-            if src == 'reg0':
-                self._reg2 += self._reg0
-            elif src == 'reg1':
-                self._reg2 += self._reg1
-            elif src == 'reg2':
-                self._reg2 += self._reg2
-            elif src == 'pc':
-                self._reg2 += self._pc
-            elif src[0] == '*':
-                self._reg2 += self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg2 += eval(src)   # handles decimal and hex values.
-        elif dst == 'pc':
-            if src == 'reg0':
-                self._pc += self._reg0
-            elif src == 'reg1':
-                self._pc += self._reg1
-            elif src == 'reg2':
-                self._pc += self._reg2
-            elif src == 'pc':
-                self._pc += self._pc
-            elif src[0] == '*':
-                self._pc += self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._pc += eval(src)   # handles decimal and hex values.                
-        elif dst[0] == '*':
-            dst = eval(dst[1:])
-            if src == 'reg0':
-                self._ram[dst] += self._reg0
-            elif src == 'reg1':
-                self._ram[dst] += self._reg1
-            elif src == 'reg2':
-                self._ram[dst] += self._reg2
-            elif src == 'pc':
-                self._ram[dst] += self._pc
-            elif src[0] == '*':
-                self._ram[dst] += self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._ram[dst] += eval(src)
-        elif dst.isdigit():   # TODO: not really good enough.
-            print("ERROR: cannot assign to a literal number.")
-        else:
-            # Assume dst is a number...  not legal
-            # TODO: raise an error.
-            print("ERROR: Bad instruction.")
-        
+                print("Illegal instruction")
+                return
+        else:   # assume dst holds a literal value
+            self._ram[eval(dst)] += srcval
+
                  
     def handle_sub(self, src, dst):
-        if dst == 'reg0':
-            if src == 'reg0':
-                self._reg0 -= self._reg0
-            elif src == 'reg1':
-                self._reg0 -= self._reg1
-            elif src == 'reg2':
-                self._reg0 -= self._reg2
-            elif src == 'pc':
-                self._reg0 -= self._pc
-            elif src[0] == '*':
-                self._reg0 -= self._get_value_at(src)
+        srcval = self._get_srcval(src)
+
+        if self.isregister(dst):
+            self._registers[dst] -= srcval
+        elif dst[0] == '*':    # for *<register>
+            if self.isregister(dst[1:]):
+                self._ram[self._registers[dst[1:]]] -= srcval
             else:
-                # Assume it is a literal value
-                self._reg0 -= eval(src)   # handles decimal and hex values.
-        elif dst == 'reg1':
-            if src == 'reg0':
-                self._reg1 -= self._reg0
-            elif src == 'reg1':
-                self._reg1 -= self._reg1
-            elif src == 'reg2':
-                self._reg1 -= self._reg2
-            elif src == 'pc':
-                self._reg1 -= self._pc
-            elif src[0] == '*':
-                self._reg1 -= self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg1 -= eval(src)   # handles decimal and hex values.
-        elif dst == 'reg2':
-            if src == 'reg0':
-                self._reg2 -= self._reg0
-            elif src == 'reg1':
-                self._reg2 -= self._reg1
-            elif src == 'reg2':
-                self._reg2 -= self._reg2
-            elif src == 'pc':
-                self._reg2 -= self._pc
-            elif src[0] == '*':
-                self._reg2 -= self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._reg2 -= eval(src)   # handles decimal and hex values.
-        elif dst == 'pc':
-            if src == 'reg0':
-                self._pc -= self._reg0
-            elif src == 'reg1':
-                self._pc -= self._reg1
-            elif src == 'reg2':
-                self._pc -= self._reg2
-            elif src == 'pc':
-                self._pc -= self._pc
-            elif src[0] == '*':
-                self._pc -= self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._pc -= eval(src)   # handles decimal and hex values.                
-        elif dst[0] == '*':
-            dst = eval(dst[1:])
-            if src == 'reg0':
-                self._ram[dst] -= self._reg0
-            elif src == 'reg1':
-                self._ram[dst] -= self._reg1
-            elif src == 'reg2':
-                self._ram[dst] -= self._reg2
-            elif src == 'pc':
-                self._ram[dst] -= self._pc
-            elif src[0] == '*':
-                self._ram[dst] -= self._get_value_at(src)
-            else:
-                # Assume it is a literal value
-                self._ram[dst] -= eval(src)
-        else:
-            # Assume dst is a number...  not legal
-            # TODO: raise an error.
-            print("ERROR: cannot assign to a literal number.")
+                print("Illegal instruction")
+                return
+        else:   # assume dst holds a literal value
+            self._ram[eval(dst)] -= srcval
 
     def handle_call(self, fname):
         self._os.syscall(fname, self._reg0, self._reg1, self._reg2)
