@@ -1,0 +1,63 @@
+
+test outputing value
+
+l 1000 calos.asm
+
+MON> d 10
+Enter value ('.' to end) [10]> 'a'
+Enter value ('.' to end) [11]> .
+
+MON> c 20
+Enter code ('.' to end) [20]> mov *10 reg2      # put 'a' into reg2
+Enter code ('.' to end) [21]> mov 23 reg1       # return address
+Enter code ('.' to end) [22]> jmp 1000          # jump to print()
+Enter code ('.' to end) [23]> end
+Enter code ('.' to end) [24]> .
+
+MON> x 20
+
+
+test inputting value:
+
+MON> c 20
+
+Enter code ('.' to end) [20]> mov 22 reg1
+Enter code ('.' to end) [21]> jmp 1006
+Enter code ('.' to end) [22]> end
+Enter code ('.' to end) [23]> .
+
+
+Code to read in a value from the keyboard and print it out twice.
+
+MON> c 20
+
+[20] mov 22 reg1    # return address
+[21] jmp 1006       # get input from kybd
+[22] mov reg2 2     # use memory locatin 2 to store inputted character.
+[23] mov *2 reg2
+[24] mov 26 reg1
+[25] jmp 1000       # output value
+[26] mov *2 reg2
+[27] mov 29 reg1
+[28] jmp 1000
+[29] mov *2 reg2
+[30] mov 32 reg1
+[31] jmp 1000
+[32] end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

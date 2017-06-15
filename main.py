@@ -1,6 +1,7 @@
 import time
 import threading   # for CPU
 import vicos
+import devices
 
 
 '''
@@ -8,8 +9,13 @@ Architecture Description:
 There are 3 registers, reg0, reg1, reg2, and a program counter
 register, pc.
 
-There are 1024 bytes of RAM, from addresses 0 to 1023.  A word
-is two bytes.
+There are 1024 words of RAM, from addresses 0 to 1023.  The number
+of bits/bytes in a word is not defined:
+o Any positive or negative number fits in a word.
+o Every instruction, including arguments, fits in a word.
+o A string of up to 4 characters fits in a word: this is
+  indicated by surrounding the string with single quotes.
+
 
 Assembly Language Instructions:
 mov <src> <dst>   move value from <src> to <dst>
@@ -31,27 +37,27 @@ jlz <reg> : < 0
 
 end  means end the program
 
-Instructions take up 2 bytes.
-
-Sample program: multiply values in addresses 0 and 2, leaving
-result in location 4.
+Sample program: multiply values in addresses 0 and 1, leaving
+result in location 2.
 
 20: mov 0 4	     # put 0 into the destination in case val1 or val2 are 0.
-22: mov *0 reg2      # move 1st value to reg2
-24: jez reg2 42      # we are done if val1 is 0
-26: mov *2 reg1      # move 2nd value to reg1
-28: jez reg1 42      # we are done if val2 is 0
-30: mov reg2 reg0    # copy reg2 to reg0
-32: sub 1 reg1       # loop: subtract 1 from val2
-34: jez reg1 40      # if == 0, we are done looping
-36: add reg0 reg2    # add reg0 to reg2  where we accumulate result
-38: jmp 32           # repeat the loop
-40: mov reg2 4       # store result in location 4
-42: end
+21: mov *0 reg2      # move 1st value to reg2
+22: jez reg2 31      # we are done if val1 is 0
+23: mov *1 reg1      # move 2nd value to reg1
+24: jez reg1 31      # we are done if val2 is 0
+25: mov reg2 reg0    # copy reg2 to reg0
+26: sub 1 reg1       # loop: subtract 1 from val2
+27: jez reg1 30      # if == 0, we are done looping
+28: add reg0 reg2    # add reg0 to reg2  where we accumulate result
+29: jmp 26           # repeat the loop
+30: mov reg2 2       # store result in location 2
+31: end
 
 '''
 
 RAM_SIZE = 1024
+
+MAX_CHARS_PER_ADDR = 4
 
 # Time to delay between executing instructions, in seconds.
 DELAY_BETWEEN_INSTRUCTIONS = 0.2
@@ -75,7 +81,7 @@ class RAM:
 
 
 class CPU(threading.Thread):
-    def __init__(self, num=0):
+    def __init__(self, ram, os, startAddr, debug, num=0):
         threading.Thread.__init__(self)
 
         self._num = num   # unique ID of this cpu
@@ -83,11 +89,22 @@ class CPU(threading.Thread):
             'reg0' : 0,
             'reg1' : 0,
             'reg2' : 0,
-            'pc': 0
+            'pc': startAddr
             }
 
-        self._ram = None
-        self._os = None
+        self._ram = ram
+        self._os = os
+        self._debug = debug
+
+        # Create Screen and Keyboard controller threads.
+        # This is done here so that when the CPU is done running a program,
+        # the screen and kbd threads can be killed.  Then if it is told
+        # to start up again, it will create new threads (since you cannot
+        # restart stopped threads).
+        self._screen = devices.ScreenController(self._ram)
+        self._kbd = devices.KeyboardController(self._ram)
+        self._screen.start()
+        self._kbd.start()
 
     def isregister(self, s):
         return s in ('reg0', 'reg1', 'reg2', 'pc')
@@ -96,28 +113,28 @@ class CPU(threading.Thread):
         # TODO: check if value of pc is good?
         self._registers['pc'] = pc
 
-    def add_ram(self, ram):
-        self._ram = ram
-
-    def add_os(self, os):
-        '''register the OS that is managing this CPU.'''
-        self._os = os
-
     def __str__(self):
-        res = '''CPU %d: pc %d, reg0 %d, reg1 %d, reg2 %d''' % \
-              (self._num, self._registers['pc'], self._registers['reg0'],
-               self._registers['reg1'], self._registers['reg2'])
+        res = '''CPU {}: pc {}, reg0 {}, reg1 {}, reg2 {}'''.format(
+            self._num, self._registers['pc'], self._registers['reg0'],
+            self._registers['reg1'], self._registers['reg2'])
         return res
 
     def run(self):
+
         while True:
-            print("Executing code at [%d]: %s" % (self._registers['pc'],
-                                                  self._ram[self._registers['pc']]))
+            if self._debug:
+                print("Executing code at [%d]: %s" % (self._registers['pc'],
+                                                      self._ram[self._registers['pc']]))
             if not self.parse_instruction(self._ram[self._registers['pc']]):
                 # False means an error occurred or the program ended, so return
-                return
-            print(self)
+                break
+            if self._debug: print(self)
             time.sleep(DELAY_BETWEEN_INSTRUCTIONS)
+
+        self._kbd.stop()
+        self._screen.stop()
+        self._kbd.join()
+        self._screen.join()
 
     def parse_instruction(self, instr):
         '''return False when program is done'''
@@ -125,7 +142,7 @@ class CPU(threading.Thread):
         # Make sure it is an instruction.  The PC may have wandered into
         # data territory.
         if isinstance(instr, int):
-            print("ERROR: Not an instruction: {0}".format(instr))
+            print("ERROR: Not an instruction: {}".format(instr))
             return False
             
         instr = instr.replace(",", "")
@@ -142,16 +159,16 @@ class CPU(threading.Thread):
             # call fname.  Function fname is a method in 
             # CalOS class and is called with the values in reg0, reg1, and reg2.
             self.handle_call(dst)
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
         elif instr == "mov":
             self.handle_mov(src, dst)
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
         elif instr == 'add':
             self.handle_add(src, dst)
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
         elif instr == 'sub':
             self.handle_sub(src, dst)
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
         elif instr == 'jez':
             self.handle_jez(src, dst)
         elif instr == 'jnz':
@@ -168,44 +185,60 @@ class CPU(threading.Thread):
         
 
     # TODO: do error checking in all these.
+    # Could check for illegal addresses, etc.
     def handle_jmp(self, dst):
-        self._registers['pc'] = eval(dst)
+        if self.isregister(dst):
+            self._registers['pc'] = self._registers[dst]
+        else:
+            self._registers['pc'] = eval(dst)
         
     def handle_jez(self, src, dst):
         if not self.isregister(src):
             print("Illegal instruction")
             return
         if self._registers[src] == 0:
-            self._registers['pc'] = eval(dst)
+            if self.isregister(dst):
+                self._registers['pc'] = self._registers[dst]
+            else:
+                self._registers['pc'] = eval(dst)
         else:
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
             
     def handle_jnz(self, src, dst):
         if not self.isregister(src):
             print("Illegal instruction")
             return
         if self._registers[src] != 0:
-            self._registers['pc'] = eval(dst)
+            if self.isregister(dst):
+                self._registers['pc'] = self._registers[dst]
+            else:
+                self._registers['pc'] = eval(dst)
         else:
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
             
     def handle_jlz(self, src, dst):
         if not self.isregister(src):
             print("Illegal instruction")
             return
         if self._registers[src] < 0:
-            self._registers['pc'] = eval(dst)
+            if self.isregister(dst):
+                self._registers['pc'] = self._registers[dst]
+            else:
+                self._registers['pc'] = eval(dst)
         else:
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
             
     def handle_jgz(self, src, dst):
         if not self.isregister(src):
             print("Illegal instruction")
             return
         if self._registers[src] > 0:
-            self._registers['pc'] = eval(dst)
+            if self.isregister(dst):
+                self._registers['pc'] = self._registers[dst]
+            else:
+                self._registers['pc'] = eval(dst)
         else:
-            self._registers['pc'] += 2
+            self._registers['pc'] += 1
 
     def _get_value_at(self, addr):
         '''addr is "*<someval>".  return the value from
@@ -289,7 +322,7 @@ class Monitor:
         self._debug = False
         self._ram = ram
 
-    def run(self):
+    def run(self):   # called from monitor._cpu.start()
         print("Monitor: enter ? to see options.")
         while True:
             try:
@@ -297,14 +330,17 @@ class Monitor:
                     print("State of the CPU is:")
                     print(str(self._cpu) + "\n" + ("-" * 75))
 
-                instr = input("MON> ")
-                if instr.strip() == '?':
+                instr = input("MON> ").strip()
+                if instr == '':
+                    # blank line
+                    continue
+                if instr == '?':
                     print("C <addr>: put code into RAM starting at addr")
                     print("D <addr>: put data values into RAM starting at addr")
                     print("S <start> <end>: show memory from start to end")
                     print("X <addr>: execute program starting at addr")
                     print("L <addr> <tapename>: load a program from tape to bytes starting at addr")
-                    print("W <start> <end> <tapename>: write bytes from start to end to tapen")
+                    print("W <start> <end> <tapename>: write bytes from start to end to tape")
                     print("! : Toggle debugging on or off -- off at startup.")
                     continue
 
@@ -359,15 +395,18 @@ class Monitor:
         with open(tapename, "r") as f:
             addr = startaddr
             for line in f:
-                if line[-1] == "\n":
-                    line = line[:-1]	# remove newline
+                line = line.strip()
+                if line == '':
+                    continue            # skip empty lines
+                if line.startswith('#'):    # skip comment lines
+                    continue
                 if line.isdigit():
                     # data
                     self._ram[addr] = int(line)
                 else:
                     # instructions
                     self._ram[addr] = line
-                addr += 2
+                addr += 1
         print("Tape loaded from %d to %d" % (startaddr, addr))
 
     def _write_program(self, startaddr, endaddr, tapename):
@@ -376,17 +415,16 @@ class Monitor:
             addr = startaddr
             while addr <= endaddr:
                 f.write(str(self._ram[addr]) + "\n")
-                addr += 2
-        print("Tape written from %d to %d" % (startaddr, addr - 2))
+                addr += 1
+        print("Tape written from %d to %d" % (startaddr, addr - 1))
 
     def _run_program(self, addr):
-        self._cpu = CPU()	# creates a new thread
-        self._cpu.add_ram(self._ram)
-        self._os = vicos.VicOS()
-        self._cpu.add_os(self._os)
-        self._cpu.set_pc(addr)
+        # creates a new thread, passing in ram, the os, and the
+        # starting address
+        self._cpu = CPU(self._ram, vicos.VicOS(), addr, self._debug)	
         self._cpu.start()		# call run()
         self._cpu.join()		# wait for it to end
+
 
     def _enter_program(self, starting_addr):
         # TODO: must make sure we enter program starting on even boundary.
@@ -399,7 +437,7 @@ class Monitor:
             if code == '.':
                 return
             self._ram[curr_addr] = code
-            curr_addr += 2
+            curr_addr += 1
             if not self._ram.is_legal_addr(curr_addr):
                 print("End of RAM")
                 return
@@ -410,13 +448,26 @@ class Monitor:
             print("Illegal address")
             return
         while True:
-            data = input("Enter int value ('.' to end) [%d]> " % (curr_addr))
+            data = input("Enter value (. to end) [%d]> " % (curr_addr))
             if data == '.':
                 return
-            data = int(data)
-            # TODO: allow a way to put characters into RAM?
-            self._ram[curr_addr] = data
-            curr_addr += 2
+            if data[0] == "'":    # user entering string, max 4 characters.
+                end = data.find("'", 1)
+                if end == -1:
+                    print("Bad string: no ending quote")
+                    return
+                if end > 5:
+                    end = 5   # max 4 characters
+                data = data[0:end] + "'"
+                self._ram[curr_addr] = data
+            else:
+                try:
+                    data = int(data)
+                except:
+                    print("Bad value")
+                    return
+                self._ram[curr_addr] = data
+            curr_addr += 1
             if not self._ram.is_legal_addr(curr_addr):
                 print("End of RAM")
                 return
@@ -436,16 +487,19 @@ class Monitor:
         while curr_addr <= end_addr:
             val = self._ram[curr_addr]
             if isinstance(val, int):
-                print("[%04d] %08d" % (curr_addr, val))
+                print("[%04d] %d" % (curr_addr, val))
             else:
                 print("[%04d] %s" % (curr_addr, val))
-            curr_addr += 2
+            curr_addr += 1
         
 
         
 # Main
 ram = RAM()
-monitor = Monitor(ram) # Like BIOS
+
+# Like BIOS
+monitor = Monitor(ram) 
 monitor.run()
+
 
     
