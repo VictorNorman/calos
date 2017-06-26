@@ -47,9 +47,58 @@ MON> c 20
 
 
 
+---------------------------------------------------------------------------
+Interrupt handling
+
+As is done on real processors, after every (asm) instruction is executed,
+have the CPU check if an interrupt has been raised.
+o add interrupt_raised (boolean) to CPU class, plus set/get methods.
+o add interrupt_addr (set of integers) to CPU class, to indicate what device raised
+  the interrupt, plus add/remove.
+o when devices/controllers are created, pass address to them in
+  constructor.
+o This is pretty realistic with real hardware...
+o add interrupt_vector[] to CPU class.  Holds names of methods to process
+  interrupts.  
+
+If the interrupt flag is true (interrupt raised),
+  o store registers in fields in the CPU
+    --> not realistic, and means an interrupt cannot be interrupted -- which
+      may be ok.  Registers should be stored on the current process stack,
+      which I don't have right now.
+  o call function in interrupt_vector[intr_addr]
+  o remove intr_addr from the list
+  o if intr_addr list is empty, clear interrupt_raised flag.
+  o restore registers
+
+
+Using this from KeyboardController:
+
+In KeyboardContoller:
+o when key is clicked, poll busy bit until 0.
+o set busy bit to 1
+o put key into data-in.
+o set read bit to 1 and then command-ready to 1.
+o set busy bit to 0.
+o put dev_id in interrupt_addrs and raise interrupt.
+
+NOTE: the above is not correct, I think.  At least that is not how it is
+implemented in the code...
 
 
 
+
+---------------------------------------------------------------------------
+
+20170623:
+
+Can load calos.asm into 1000, then load io.asm into 20, then x 20.
+
+When you enter a key, it prints it out 3 times.
+
+NOTE: this is all done with polling, not interrupt handling.
+
+NEXT: 
 
 
 

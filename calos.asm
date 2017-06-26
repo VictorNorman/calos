@@ -25,9 +25,8 @@ jmp reg1
 # 997: status
 # 998: control/command
 # 999: data-in
-# This code starts at 1006.
 
-# Pseudo-code:
+# This code starts at 1006.
 # read busy bit in status register until it is 0
 mov *997 reg0
 jnz reg0 1006

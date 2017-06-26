@@ -15,9 +15,10 @@ class KeyboardController(threading.Thread):
       o bit 2 = read
     o 999: data-in
 
-    The KeyboardController waits for the command-ready bit and read bits to be set.  When they
-    are, it sets the busy bit to 1.  Then it writes keyboard characters to the
-    data-in location -- a string up of to 4 characters, starting and ending with single quotes.
+    The KeyboardController waits for the command-ready bit and read bits to be set.
+    When they are, it sets the busy bit to 1.  Then it writes keyboard
+    characters to the data-in location -- a string up of to 4 characters,
+    starting and ending with single quotes. 
     Then, it clears the command-ready and busy bits.
     '''
     STATUS_REG = 997
@@ -25,11 +26,15 @@ class KeyboardController(threading.Thread):
     DATA_IN_REG = 999
     DELAY = 1    # much slower than the CPU
 
-    def __init__(self, ram):
+    def __init__(self, ram, cpu, dev_id):
         threading.Thread.__init__(self)
         self._chars_buf = []
         self._ram = ram
+        self._cpu = cpu
         self._stopped = False
+        # Bus address identifier: used to indicate to the CPU
+        # what device has raised an interrupt.
+        self._dev_id = dev_id
 
     def stop(self):
         self._stopped = True
@@ -42,9 +47,10 @@ class KeyboardController(threading.Thread):
         oldSettings = termios.tcgetattr(fd)
         tty.setcbreak(fd)    # get one character, as soon as it is typed.
         while not self._stopped:
-            # Always be reading characters from the keyboard, storing the last 4 characters.
+            # Always be reading characters from the keyboard, storing the
+            # last 4 characters.
             charFromKb = sys.stdin.read(1)
-            print("Got character -->{}<--".format(charFromKb))
+            print("KeyboardController: Got character -->{}<--".format(charFromKb))
             # keep list to 4 characters at most
             if len(self._chars_buf) == 4:
                 # remove the oldest key from the list.
@@ -62,6 +68,8 @@ class KeyboardController(threading.Thread):
                     # clear command-ready and read bits, and busy bits.
                     self._ram[self.CTRL_REG] = 0
                     self._ram[self.STATUS_REG] = 0
+                    self._cpu.add_interrupt_addr(self._dev_id)
+                    self._cpu.set_interrupt(True)
             time.sleep(self.DELAY)
         # reset tty to old settings.
         termios.tcsetattr(fd, termios.TCSADRAIN, oldSettings)
@@ -90,10 +98,13 @@ class ScreenController(threading.Thread):
     DATA_OUT_REG = 1022
     DELAY = 0.5     # 1/2 second: much slower than CPU
 
-    def __init__(self, ram):
+    def __init__(self, ram, cpu, dev_id):
         threading.Thread.__init__(self)
         self._ram = ram
         self._stopped = False
+        # Indicates it bus address identifier: used to indicate to the CPU
+        # what device # has raised an interrupt.
+        self._dev_id = dev_id
 
     def stop(self):
         self._stopped = True

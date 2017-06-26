@@ -7,6 +7,10 @@ MAX_CHARS_PER_ADDR = 4
 # Time to delay between executing instructions, in seconds.
 DELAY_BETWEEN_INSTRUCTIONS = 0.2
 
+# Interrrupt device ids
+KBRD_DEV_ID   = 0
+SCREEN_DEV_ID = 1
+
 
 class CPU(threading.Thread):
     def __init__(self, ram, os, startAddr, debug, num=0):
@@ -24,22 +28,55 @@ class CPU(threading.Thread):
         self._os = os
         self._debug = debug
 
+        # TODO: need to protect these next two variables as they are shared
+        # between the CPU thread and the device threads.
+        self._intr_raised = False
+        self._intr_addrs = set()
+        
+        self._intr_vector = [self._handle_kbrd_intr,
+                             self._handle_screen_intr]
+
+        # Dictionary of registers and their values, that is used when
+        # an interrupt occurs and the current state of the CPU needs to be
+        # stored.
+        self._backup_registers = {}
+
         # Create Screen and Keyboard controller threads.
         # This is done here so that when the CPU is done running a program,
         # the screen and kbd threads can be killed.  Then if it is told
         # to start up again, it will create new threads (since you cannot
         # restart stopped threads).
-        self._screen = devices.ScreenController(self._ram)
-        self._kbd = devices.KeyboardController(self._ram)
-        self._screen.start()
-        self._kbd.start()
+        self._kbd = devices.KeyboardController(self._ram, self, KBRD_DEV_ID)
+        self._screen = devices.ScreenController(self._ram, self, SCREEN_DEV_ID)
 
-    def isregister(self, s):
-        return s in ('reg0', 'reg1', 'reg2', 'pc')
+        self._kbd.start()
+        self._screen.start()
+        print("Started kbd and screen device controller threads.")
 
     def set_pc(self, pc):
         # TODO: check if value of pc is good?
         self._registers['pc'] = pc
+
+    def set_interrupt(self, intr_val):
+        '''Set the interrupt line to be True if an interrupt is raised, or
+        False to indicate the interrupt is cleared.
+        '''
+        assert isinstance(intr_val, bool)
+        self._intr_raised = intr_val
+
+    def add_interrupt_addr(self, addr):
+        '''Add the device bus address to the set of devices that have
+        raised an interrupt.'''
+        self._intr_addrs.add(addr)
+
+    def backup_registers(self):
+        self._backup_registers = self._registers
+
+    def restore_registers(self):
+        self._registers = self._backup_registers
+
+    def isregister(self, s):
+        return s in ('reg0', 'reg1', 'reg2', 'pc')
 
     def __str__(self):
         res = '''CPU {}: pc {}, reg0 {}, reg1 {}, reg2 {}'''.format(
@@ -56,7 +93,25 @@ class CPU(threading.Thread):
             if not self.parse_instruction(self._ram[self._registers['pc']]):
                 # False means an error occurred or the program ended, so return
                 break
+            # print CPU state
             if self._debug: print(self)
+
+            # Now, check if an interrupt has been raised.  If it has, run the
+            # corresponding handler(s).
+            # TODO: critical section below!
+            if self._intr_raised:
+                if self._debug: print("GOT INTERRUPT")
+                self.backup_registers()
+                for addr in sorted(self._intr_addrs):
+                    # Call the interrupt handler.
+                    self._intr_vector[addr]()
+                    # Remove the device address from the list of pending interrupts.
+                    self._intr_addrs.remove(addr)
+                
+                # Mark all interrupts handled.
+                self.restore_registers()
+                self.set_interrupt(False)  # clear the interrupt
+            
             time.sleep(DELAY_BETWEEN_INSTRUCTIONS)
 
         self._kbd.stop()
@@ -243,3 +298,14 @@ class CPU(threading.Thread):
     def handle_call(self, fname):
         self._os.syscall(fname, self._reg0, self._reg1, self._reg2)
 
+
+    def _handle_kbrd_intr(self):
+        # Read the value from the register in ram.
+        key = self._ram[999]
+        # Clear the data-in register
+        self._ram[999] = 0
+        print("Keyboard interrupt detected! location 999 holds", key)
+        
+
+    def _handle_screen_intr(self):
+        print("Screen interrupt detected!")
