@@ -1,5 +1,6 @@
 # Multiply two numbers, found in locations 0 and 1, leaving the result in location 2.
 # Assumes this code is loaded at location 20.
+__main:
 mov 0 2
 mov *0 reg2
 jez reg2 31

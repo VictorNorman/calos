@@ -33,8 +33,8 @@ class CPU(threading.Thread):
         self._intr_raised = False
         self._intr_addrs = set()
         
-        self._intr_vector = [self._handle_kbrd_intr,
-                             self._handle_screen_intr]
+        self._intr_vector = [self._kbrd_isr,
+                             self._screen_isr]
 
         # Dictionary of registers and their values, that is used when
         # an interrupt occurs and the current state of the CPU needs to be
@@ -299,7 +299,7 @@ class CPU(threading.Thread):
         self._os.syscall(fname, self._reg0, self._reg1, self._reg2)
 
 
-    def _handle_kbrd_intr(self):
+    def _kbrd_isr(self):
         # Read the value from the register in ram.
         key = self._ram[999]
         # Clear the data-in register
@@ -307,5 +307,5 @@ class CPU(threading.Thread):
         print("Keyboard interrupt detected! location 999 holds", key)
         
 
-    def _handle_screen_intr(self):
+    def _screen_isr(self):
         print("Screen interrupt detected!")

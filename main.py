@@ -1,6 +1,6 @@
 import time
 import threading
-import vicos
+import calos
 from cpu import CPU
 from ram import RAM
 
@@ -134,22 +134,29 @@ class Monitor:
     def _load_program(self, startaddr, tapename):
         '''Load a program into memory from a stored tape (a file) starting
         at address startaddr.'''
-        with open(tapename, "r") as f:
-            addr = startaddr
-            for line in f:
-                line = line.strip()
-                if line == '':
-                    continue            # skip empty lines
-                if line.startswith('#'):    # skip comment lines
-                    continue
-                if line.isdigit():
-                    # data
-                    self._ram[addr] = int(line)
-                else:
-                    # instructions
-                    self._ram[addr] = line
-                addr += 1
-        print("Tape loaded from %d to %d" % (startaddr, addr))
+        try:
+            with open(tapename, "r") as f:
+                addr = startaddr
+                for line in f:
+                    line = line.strip()
+                    if line == '':
+                        continue            # skip empty lines
+                    if line.startswith('#'):    # skip comment lines
+                        continue
+                    if line.isdigit():
+                        # data
+                        self._ram[addr] = int(line)
+                    else:                        # instructions or label
+                        # Detect entry point label
+                        if line == "__main:":
+                            print("Main found at", addr)
+                            # TODO: store entry point address.
+                            continue
+                        self._ram[addr] = line
+                    addr += 1
+            print("Tape loaded from %d to %d" % (startaddr, addr))
+        except FileNotFoundError:
+            print("File not found")
 
     def _write_program(self, startaddr, endaddr, tapename):
         '''Write memory from startaddr to endaddr to tape (a file).'''
@@ -163,10 +170,9 @@ class Monitor:
     def _run_program(self, addr):
         # creates a new thread, passing in ram, the os, and the
         # starting address
-        self._cpu = CPU(self._ram, vicos.VicOS(), addr, self._debug)	
+        self._cpu = CPU(self._ram, calos.CalOS(), addr, self._debug)
         self._cpu.start()		# call run()
         self._cpu.join()		# wait for it to end
-
 
     def _enter_program(self, starting_addr):
         # TODO: must make sure we enter program starting on even boundary.
