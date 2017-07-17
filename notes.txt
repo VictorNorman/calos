@@ -98,8 +98,62 @@ When you enter a key, it prints it out 3 times.
 
 NOTE: this is all done with polling, not interrupt handling.
 
-NEXT: 
+---------------------------------------------------------------------------
 
+Starting up and shutting down the I/O controllers is a real pain...  Maybe
+skip this altogether -- just use python to do it (print() and input()).
+
+Should I have a "boot" option in the Monitor, like BIOS?  If so, then it
+would look for a file with a certain name -- calos.py or calos.asm -- and
+start running it...
+
+calos.asm could be a just a system call to init(), where the code is to
+start up the OS.
+
+But, how about loading programs and creating processes?  Do we want to
+duplicate the Monitor code in the OS?
+
+Or, when we load a program does it get added to the ready queue
+automatically?  But, then, is the Monitor the OS, with a ready queue, etc.?
+
+
+GRRRRR....
+
+---------------------------------------------------------------------------
+
+Could CalOS be run by the CPU thread?  It should be.  The code is basically:
+CPU.run():
+    forever:
+        if ready q is empty:
+            run idle proc, which does nothing but loop.
+        else:
+            pop first process off ready queue and run it
+            (set pc and call run_program()).
+How to break out of the idle proc...
+-> an interrupt should do it, but what interrupt?
+  --> perhaps idle proc sets timer to very short quantum, so it gets interrupted
+      often and checks if the ready q is empty or not.
+  --> MEANs i have to implement the timer device.
+
+
+
+---------------------------------------------------------------------------
+7/17/17:
+
+testing CalOS.  Should context switch between two processes...
+
+
+Mac52078:~/classes/cs232/new_course/calos vtn2$ python3 main.py
+MON> l 20 mult.asm
+MON> l 100 fib.asm
+MON> d 10
+Enter value (. to end) [10]> 5
+Enter value (. to end) [11]> 3
+Enter value (. to end) [12]> .
+MON> d 50
+Enter value (. to end) [50]> 20
+Enter value (. to end) [51]> .
+MON> r
 
 
 

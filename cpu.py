@@ -10,10 +10,12 @@ DELAY_BETWEEN_INSTRUCTIONS = 0.2
 # Interrrupt device ids
 KBRD_DEV_ID   = 0
 SCREEN_DEV_ID = 1
+TIMER_DEV_ID  = 2
 
 
 class CPU(threading.Thread):
-    def __init__(self, ram, os, startAddr, debug, num=0):
+
+    def __init__(self, ram, os, num=0):
         threading.Thread.__init__(self)
 
         self._num = num   # unique ID of this cpu
@@ -21,41 +23,47 @@ class CPU(threading.Thread):
             'reg0' : 0,
             'reg1' : 0,
             'reg2' : 0,
-            'pc': startAddr
+            'pc': 0
             }
 
         self._ram = ram
         self._os = os
-        self._debug = debug
+        self._debug = False
 
-        # TODO: need to protect these next two variables as they are shared
-        # between the CPU thread and the device threads.
         self._intr_raised = False
         self._intr_addrs = set()
+
+        self._intr_lock = threading.Lock()
         
         self._intr_vector = [self._kbrd_isr,
-                             self._screen_isr]
+                             self._screen_isr,
+                             self._timer_isr]
 
-        # Dictionary of registers and their values, that is used when
-        # an interrupt occurs and the current state of the CPU needs to be
-        # stored.
-        self._backup_registers = {}
-
-        # Create Screen and Keyboard controller threads.
+        # Create device controller threads.
         # This is done here so that when the CPU is done running a program,
         # the screen and kbd threads can be killed.  Then if it is told
         # to start up again, it will create new threads (since you cannot
         # restart stopped threads).
+        # TODO: revisit the above decision?  CPU thread is not stopped anymore...
         self._kbd = devices.KeyboardController(self._ram, self, KBRD_DEV_ID)
         self._screen = devices.ScreenController(self._ram, self, SCREEN_DEV_ID)
+        self._timer = devices.TimerController(self, TIMER_DEV_ID)
 
-        self._kbd.start()
-        self._screen.start()
-        print("Started kbd and screen device controller threads.")
+        self._os.set_timer_controller(self._timer)
+
 
     def set_pc(self, pc):
         # TODO: check if value of pc is good?
         self._registers['pc'] = pc
+
+    def set_debug(self, debug):
+        self._debug = debug
+
+    def take_interrupt_mutex(self):
+        self._intr_lock.acquire()
+
+    def release_interrupt_mutex(self):
+        self._intr_lock.release()
 
     def set_interrupt(self, intr_val):
         '''Set the interrupt line to be True if an interrupt is raised, or
@@ -69,11 +77,13 @@ class CPU(threading.Thread):
         raised an interrupt.'''
         self._intr_addrs.add(addr)
 
-    def backup_registers(self):
-        self._backup_registers = self._registers
+    def get_registers(self):
+        return self._registers
 
-    def restore_registers(self):
-        self._registers = self._backup_registers
+    def set_registers(self, registers):
+        if registers == {}:
+            raise ValueError
+        self._registers = registers
 
     def isregister(self, s):
         return s in ('reg0', 'reg1', 'reg2', 'pc')
@@ -85,39 +95,50 @@ class CPU(threading.Thread):
         return res
 
     def run(self):
+        '''Called when this thread is started: call the OS to
+        set up the ready queue, etc.
+        '''
+        self._os.run(self)
+
+    def run_process(self):
+        '''Run a single process, by executing the instructions
+        at the program counter (pc), until the "end" instruction is reached.
+        Assumes the registers, including the pc, have been set for the
+        "ready" process.
+        '''
 
         while True:
             if self._debug:
-                print("Executing code at [%d]: %s" % (self._registers['pc'],
-                                                      self._ram[self._registers['pc']]))
+                print(self._registers)
+                print("Executing code at [{}]: {}".format(self._registers['pc'],
+                                                          self._ram[self._registers['pc']]))
+
+            # Execute the next instruction.
             if not self.parse_instruction(self._ram[self._registers['pc']]):
                 # False means an error occurred or the program ended, so return
                 break
-            # print CPU state
             if self._debug: print(self)
 
             # Now, check if an interrupt has been raised.  If it has, run the
-            # corresponding handler(s).
-            # TODO: critical section below!
-            if self._intr_raised:
-                if self._debug: print("GOT INTERRUPT")
-                self.backup_registers()
-                for addr in sorted(self._intr_addrs):
-                    # Call the interrupt handler.
-                    self._intr_vector[addr]()
-                    # Remove the device address from the list of pending interrupts.
-                    self._intr_addrs.remove(addr)
-                
-                # Mark all interrupts handled.
-                self.restore_registers()
-                self.set_interrupt(False)  # clear the interrupt
+            # corresponding handler.  Repeat until all interrupts have been serviced.
+            self.take_interrupt_mutex()
+            try:
+                if self._intr_raised:
+                    if self._debug: print("GOT INTERRUPT")
+
+                    for addr in sorted(self._intr_addrs):
+                        # Call the interrupt handler.
+                        self._intr_vector[addr]()
+                        # Remove the device address from the list of pending interrupts.
+                        self._intr_addrs.remove(addr)
+                    
+                    # Mark all interrupts handled.
+                    self.set_interrupt(False)  # clear the interrupt
+            finally:
+                self.release_interrupt_mutex()
             
             time.sleep(DELAY_BETWEEN_INSTRUCTIONS)
 
-        self._kbd.stop()
-        self._screen.stop()
-        self._kbd.join()
-        self._screen.join()
 
     def parse_instruction(self, instr):
         '''return False when program is done'''
@@ -309,3 +330,8 @@ class CPU(threading.Thread):
 
     def _screen_isr(self):
         print("Screen interrupt detected!")
+
+    def _timer_isr(self):
+        '''Timer interrupt handler.  Pass control to the OS.'''
+        self._os.timer_isr()
+        

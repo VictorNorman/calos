@@ -1,7 +1,65 @@
-__author__ = 'vtn2'
+'''Devices that interact with the CPU: I/O ports, timer, etc.'''
 
 import threading
 import time
+import cpu
+
+class TimerController(threading.Thread):
+    '''This controller controls a timer device that interrupts the
+    CPU whenever the timer runs down to 0.
+    '''
+
+    DELAY = cpu.DELAY_BETWEEN_INSTRUCTIONS
+
+    def __init__(self, cpu, dev_id):
+        threading.Thread.__init__(self)
+        self._cpu = cpu
+
+        # Bus address identifier: used to indicate to the CPU
+        # what device has raised an interrupt.
+        self._dev_id = dev_id
+        self._countdown = 0
+        self._mutex = threading.Lock()
+        print("TimerController created!")
+
+    def set_countdown(self, val):
+        '''Set the number of seconds until the timer fires.
+        '''
+        with self._mutex:
+            self._countdown = val
+        print("Timer: set countdown to", self._countdown)
+
+    def run(self):
+        '''When running, count down from _countdown to 0, and then
+        raise an interrupt.  When not running, periodically see if
+        the countdown value has been set -- enabling the timer again.
+        '''
+
+        print("TimerController: running!")
+        while True:
+            # Copy value to local variable
+            with self._mutex:
+                countdown = self._countdown
+                
+            if countdown > 0:
+                countdown -= 1
+            if countdown == 0:
+                # timer expired!
+                self._cpu.take_interrupt_mutex()
+                self._cpu.add_interrupt_addr(self._dev_id)
+                self._cpu.set_interrupt(True)
+                self._cpu.release_interrupt_mutex()
+                # Don't generate another interrupt until the
+                # previous one is handled and the interrupt is
+                # reset.
+                countdown = -1
+            else: # countdown < 0: indicating do nothing.
+                pass
+
+            with self._mutex:
+                self._countdown = countdown
+
+            time.sleep(self.DELAY)
 
 
 class KeyboardController(threading.Thread):
@@ -50,7 +108,7 @@ class KeyboardController(threading.Thread):
             # Always be reading characters from the keyboard, storing the
             # last 4 characters.
             charFromKb = sys.stdin.read(1)
-            print("KeyboardController: Got character -->{}<--".format(charFromKb))
+            # print("KeyboardController: Got character -->{}<--".format(charFromKb))
             # keep list to 4 characters at most
             if len(self._chars_buf) == 4:
                 # remove the oldest key from the list.
@@ -73,7 +131,7 @@ class KeyboardController(threading.Thread):
             time.sleep(self.DELAY)
         # reset tty to old settings.
         termios.tcsetattr(fd, termios.TCSADRAIN, oldSettings)
-        print("KBD thread: done!")
+        # print("KBD thread: done!")
         
 
 class ScreenController(threading.Thread):
@@ -117,7 +175,7 @@ class ScreenController(threading.Thread):
                 if self._ram[self.CTRL_REG] & 0x2 == 0x2:
                     # write bit is set
                     data = self._ram[self.DATA_OUT_REG]
-                    print("SCREEN> " + str(eval(data)))
+                    # print("SCREEN> " + str(eval(data)))
                     # clear command-ready and write, data-out, and busy bits.
                     self._ram[self.CTRL_REG] = 0
                     self._ram[self.DATA_OUT_REG] = 0
