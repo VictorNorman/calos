@@ -76,23 +76,18 @@ class CalOS:
         and continue.  Else, context_switch.
         '''
 
-        # All ISRs do this: save registers of current process.
-        CalOS.current_proc.set_registers(self._cpu.get_registers())
-
-
         print("End of quantum!")
+        # if no other processes ready or one process is ready and it is the 
+        # idle process (which should always be ready, actually).
         if len(self._ready_q) == 0 or \
            (len(self._ready_q) == 1 and self._ready_q[0].get_pid() == 0):
             # Leave current proc in place, as running: just reset the timer.
-
             self.reset_timer()
-            # Required of all ISRs: restore the registers before returning
-            # (if no context switch)
-            self._cpu.set_registers(CalOS.current_proc.get_registers())
             return
 
         old_proc = CalOS.current_proc
         new_proc = self._ready_q.pop(0)
+        assert new_proc.get_state() == PCB.READY
         print("Switching procs from {} to {}".format(old_proc.get_name(), new_proc.get_name()))
 
         self.context_switch(new_proc)
@@ -136,11 +131,11 @@ class CalOS:
         # the soon-to-be first process, before starting the controller.
         CalOS.current_proc = self._ready_q[0]
         self.reset_timer()
-
         self._timer_controller.start()
 
         while self._active_processes > 0:
             CalOS.current_proc = self._ready_q.pop(0)
+            CalOS.current_proc.set_state(PCB.RUNNING)
             self.reset_timer()
             self._cpu.set_registers(CalOS.current_proc.get_registers())
 
@@ -203,9 +198,14 @@ class PCB:
         assert st in self.LEGAL_STATES
         self._state = st
 
+    def get_state(self):
+        return self._state
+
     def set_registers(self, registers):
-        self._registers = registers
-        
+        '''make a copy of the dictionary being passed in, so that we
+        don't have multiple references to it.'''
+        self._registers = dict(registers)
+                
     def get_registers(self):
         return self._registers
 

@@ -83,7 +83,8 @@ class CPU(threading.Thread):
     def set_registers(self, registers):
         if registers == {}:
             raise ValueError
-        self._registers = registers
+        # make a copy of the registers so that we don't have multiple references to it.
+        self._registers = dict(registers)
 
     def isregister(self, s):
         return s in ('reg0', 'reg1', 'reg2', 'pc')
