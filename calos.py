@@ -76,7 +76,8 @@ class CalOS:
         and continue.  Else, context_switch.
         '''
 
-        print("End of quantum!")
+        if self._debug:
+            print("End of quantum!")
         # if no other processes ready or one process is ready and it is the 
         # idle process (which should always be ready, actually).
         if len(self._ready_q) == 0 or \

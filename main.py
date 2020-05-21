@@ -190,7 +190,7 @@ class Monitor:
                             continue
                         self._ram[addr] = line
                     addr += 1
-            print("Tape loaded from {} to {}".format(startaddr, addr))
+            print("Tape loaded from {} to {}".format(startaddr, addr - 1))
             pcb.set_memory_limits(startaddr, addr)
             print(pcb)
         except FileNotFoundError:
