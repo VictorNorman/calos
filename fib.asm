@@ -1,10 +1,10 @@
 # Generate the fibonacci sequence.
-# location 50: number of iterations
-# output starts at 500.
+# At location 50: number of iterations
+# Output starts at 500.
 # Assume code is loaded at location 100.
 # Temp storage starts at 150.
 
-__main:
+__main: 100
 # fib1 and fib2 values stored in locations 150, 151
 # They start at 1 and 1.
 mov 1 150

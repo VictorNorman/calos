@@ -1,7 +1,5 @@
-import time
-import threading
 import calos
-from cpu import CPU
+from cpu import CPU, MAX_CHARS_PER_ADDR
 from ram import RAM
 
 
@@ -59,20 +57,22 @@ result in location 2.
 
 class Monitor:
     def __init__(self, ram):
-        self._debug = True		# TODO: set to False when things improve
+        self._debug = False
         self._ram = ram
+
         self._os = calos.CalOS(ram)
         # may have to become a list of cores
-        self._cpu = CPU(self._ram, self._os)
-        self._os.set_cpu(self._cpu)
-        self._cpu.set_debug(self._debug)
+        self._cpus = [ CPU(self._ram, self._os, 0) , CPU(self._ram, self._os, 1) ]
+        self._os.set_cpus(self._cpus)
+        self.set_debug(False)
 
     def run(self):
         print("Monitor: enter ? to see options.")
         while True:
             if self._debug:
-                print("State of the CPU is:")
-                print(str(self._cpu) + "\n" + ("-" * 75))
+                for cpu in self._cpus:
+                    print(cpu)
+                print("-" * 75)
 
             instr = input("MON> ").strip()
             if instr == '':
@@ -89,8 +89,8 @@ class Monitor:
                 print("! : Toggle debugging on or off -- off at startup.")
                 continue
 
-            # Remove all commas, just in case.
-            instr = instr.replace(",", "")
+            # Remove all commas, just in case, and upper-case the command
+            instr = instr.replace(",", "").upper()
             
             # 0 argument cases
             numargs = len(instr.split())
@@ -107,10 +107,9 @@ class Monitor:
                     
     def _zero_arg_instr(self, instr):
         if instr.startswith("!"):
-            self._debug = not self._debug
-            self._cpu.set_debug(self._debug)
-        elif instr.upper().startswith("R"):
-            self._os.run(self._cpu)
+            self.set_debug(not self._debug)
+        elif instr.startswith("R"):
+            self._os.run()
         else:
             print("Unknown command")
 
@@ -120,41 +119,52 @@ class Monitor:
         except:
             print("Illegal format: ", instr.split()[1])
             return
-        if instr.upper().startswith('C '):
+        if instr.startswith('C '):
             self._enter_program(arg1)
-        elif instr.upper().startswith('D '):
+        elif instr.startswith('D '):
             self._poke_ram(arg1)
-        elif instr.upper().startswith('X '):
+        elif instr.startswith('X '):
             self._run_program(arg1)
         else:
             print("Unknown command")
 
     def _two_arg_instr(self, instr):
-        if instr.upper().startswith('S '):
+        if instr.startswith('S '):
             try:
                 startaddr = eval(instr.split()[1])
                 endaddr = eval(instr.split()[2])
+                self._dump_ram(startaddr, endaddr)
             except:
                 print("Illegal format")
-            self._dump_ram(startaddr, endaddr)
-        elif instr.upper().startswith('L '):
+
+        elif instr.startswith('L '):
             try:
                 startaddr = eval(instr.split()[1])
                 tapename = instr.split()[2]
+                self._load_program(startaddr, tapename)
             except:
                 print("Illegal format")
-            self._load_program(startaddr, tapename)
-
-    def _three_arg_instr(self, instr):
-        if instr.upper().startswith('W '):
-            try:
-                endaddr = eval(instr.split()[2])
-                tapename = instr.split()[3]
-            except:
-                print("Illegal format")
-            self._write_program(arg1, endaddr, tapename)
         else:
             print("Unknown command")
+
+
+    def _three_arg_instr(self, instr):
+        if instr.startswith('W '):
+            try:
+                startaddr = eval(instr.split()[1])
+                endaddr = eval(instr.split()[2])
+                tapename = instr.split()[3]
+                self._write_program(startaddr, endaddr, tapename)
+            except:
+                print("Illegal format")
+        else:
+            print("Unknown command")
+
+    def set_debug(self, debug):
+        self._debug = debug
+        for cpu in self._cpus:
+            cpu.set_debug(self._debug)
+        self._os.set_debug(self._debug)
 
     def _load_program(self, startaddr, tapename, procname=None):
         '''Load a program into memory from a stored tape (a file) starting
@@ -173,30 +183,59 @@ class Monitor:
                 if self._debug:
                     print("Created PCB for process {}".format(procname))
                 addr = startaddr
+                pcb.set_low_mem(addr)
                 for line in f:
                     line = line.strip()
                     if line == '':
                         continue            # skip empty lines
                     if line.startswith('#'):    
                         continue	    # skip comment lines
-                    if line.isdigit():
-                        # data
+                    if line.isdigit():      # data
                         self._ram[addr] = int(line)
-                    else:                   # instructions or label
-                        # Detect entry point label
-                        if line == "__main:":
-                            if self._debug: print("Main found at location", addr)
-                            pcb.set_entry_point(addr)
-                            continue
+                        addr += 1
+                    elif line.startswith("__main:"):
+                        self._handle_main_label(addr, line, pcb)
+                    elif line.startswith("__data:"):
+                        self._handle_data_label(addr, line, pcb)
+                    else:   # the line is regular code: store it in ram
                         self._ram[addr] = line
-                    addr += 1
+                        addr += 1
             print("Tape loaded from {} to {}".format(startaddr, addr - 1))
-            pcb.set_memory_limits(startaddr, addr)
-            print(pcb)
+            if self._debug:
+                print(pcb)
         except FileNotFoundError:
             print("File not found")
-        if pcb:
+        if pcb is not None:
             self._os.add_to_ready_q(pcb)
+
+    def _handle_main_label(self, addr, line, pcb):
+        """line from the file has format __main: <addr>,
+        which indicates where the entry point is.  Note: all
+        addresses in the code are logical.
+        e.g., __main: 0 means the code assumes
+        the executable lives at 0.  It might be loaded
+        into some other location, which is the value in addr.
+        """
+        if len(line.split()) != 2:
+            raise ValueError("Illegal format: __main: must be followed by entrypoint address.")
+        logical_addr = int(line.split()[1])
+        pcb.set_entry_point(logical_addr)
+        if self._debug:
+            print("__main found at physical location", addr, "but logical addr", logical_addr)
+
+    def _handle_data_label(self, addr, line, pcb):
+        """line from the file has format __data: <size>,
+        which indicates how many bytes are needed to store data for the program.
+        NOTE NOTE NOTE: we assume this label, if found, is immediately after the
+        code.
+        """
+        if len(line.split()) != 2:
+            raise ValueError("Illegal format: __data: must be followed by # of bytes.")
+        num_bytes = int(line.split()[1])
+        pcb.set_high_mem(addr + num_bytes)
+        if self._debug:
+            print("__data found at physical location", addr, "with size", num_bytes)
+            print("high memory limit set at", addr + num_bytes)
 
     def _write_program(self, startaddr, endaddr, tapename):
         '''Write memory from startaddr to endaddr to tape (a file).'''
@@ -209,9 +248,9 @@ class Monitor:
 
     def _run_program(self, addr):
         # Set the program counter and start the CPU running.
-        self._cpu.set_pc(addr)
-        self._cpu.start()		# call run()
-        self._cpu.join()		# wait for it to end
+        self._cpus[0].set_pc(addr)
+        self._cpus[0].start()		# call run()
+        self._cpus[0].join()		# wait for it to end
 
     def _enter_program(self, starting_addr):
         # TODO: must make sure we enter program starting on even boundary.

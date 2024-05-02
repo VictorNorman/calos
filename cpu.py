@@ -1,6 +1,5 @@
 import time
 import threading   # for CPU
-import devices
 
 MAX_CHARS_PER_ADDR = 4
 
@@ -8,35 +7,42 @@ MAX_CHARS_PER_ADDR = 4
 DELAY_BETWEEN_INSTRUCTIONS = 0.2
 
 # Interrrupt device ids
-KBRD_DEV_ID   = 0
-SCREEN_DEV_ID = 1
-TIMER_DEV_ID  = 2
+SOFTWARE_TRAP_DEV_ID = 0
+TIMER_DEV_ID  = 1
+# KBRD_DEV_ID   = 1
+# SCREEN_DEV_ID = 2
+
+# REASONs for software traps.
+END_OF_PROGRAM = 0
+ILLEGAL_ADDRESS = 1
+ILLEGAL_INSTRUCTION = 2
 
 
-class CPU(threading.Thread):
+class CPU:
 
     def __init__(self, ram, os, num=0):
-        threading.Thread.__init__(self)
+
+        # TODO: the CPU should know nothing about the OS.  The CPU should
+        # just execute instructions and handle the interrupts.  We should
+        # not pass the OS object in, but instead should make an API which
+        # the OS code could call to register a callback to be called for
+        # the various interrupts -- the software trap, timer expiration,
+        # etc.
 
         self._num = num   # unique ID of this cpu
-        self._registers = {
-            'reg0' : 0,
-            'reg1' : 0,
-            'reg2' : 0,
-            'pc': 0
-            }
+        self.clear_registers()
 
-        self._ram = ram
         self._os = os
         self._debug = False
+        # Set _stop to True to "power down" the CPU.
+        self._stop = False
 
         self._intr_raised = False
         self._intr_addrs = set()
 
         self._intr_lock = threading.Lock()
         
-        self._intr_vector = [self._kbrd_isr,
-                             self._screen_isr,
+        self._intr_vector = [self._trap_isr,
                              self._timer_isr]
 
         # Create device controller threads.
@@ -45,19 +51,30 @@ class CPU(threading.Thread):
         # to start up again, it will create new threads (since you cannot
         # restart stopped threads).
         # TODO: revisit the above decision?  CPU thread is not stopped anymore...
-        self._kbd = devices.KeyboardController(self._ram, self, KBRD_DEV_ID)
-        self._screen = devices.ScreenController(self._ram, self, SCREEN_DEV_ID)
-        self._timer = devices.TimerController(self, TIMER_DEV_ID)
+        # Also, not using the Keyboard and Screen devices...
+        # And, it seems weird for the CPU to start up the other device controllers...
+        import devices
+        self._timer = devices.TimerController(self, TIMER_DEV_ID, self._debug)
 
-        self._os.set_timer_controller(self._timer)
+        # Create MMU.
+        from ram import MMU
+        self._mmu = MMU(ram)
 
+        # Start up the thread, though its countdown will be -1, so it won't do anything
+        # until that is set.
+        self._timer.start()
 
     def set_pc(self, pc):
         # TODO: check if value of pc is good?
         self._registers['pc'] = pc
 
+    def get_num(self):
+        """return the index of this CPU in the system"""
+        return self._num
+
     def set_debug(self, debug):
         self._debug = debug
+        self._timer.set_debug(debug)
 
     def take_interrupt_mutex(self):
         self._intr_lock.acquire()
@@ -86,6 +103,14 @@ class CPU(threading.Thread):
         # make a copy of the registers so that we don't have multiple references to it.
         self._registers = dict(registers)
 
+    def clear_registers(self):
+        self._registers = {
+            'reg0' : 0,
+            'reg1' : 0,
+            'reg2' : 0,
+            'pc': 0
+            }
+
     def isregister(self, s):
         return s in ('reg0', 'reg1', 'reg2', 'pc')
 
@@ -95,37 +120,42 @@ class CPU(threading.Thread):
             self._registers['reg1'], self._registers['reg2'])
         return res
 
-    def run(self):
-        '''Called when this thread is started: call the OS to
-        set up the ready queue, etc.
-        '''
-        self._os.run(self)
+    def reset_timer(self, quantum):
+        self._timer.set_countdown(quantum)
 
-    def run_process(self):
-        '''Run a single process, by executing the instructions
+    def run_cpu(self):
+        '''Run the CPU which repeatedly executes the instructions
         at the program counter (pc), until the "end" instruction is reached.
         Assumes the registers, including the pc, have been set for the
-        "ready" process.
+        "ready" process.  The execution will be interrupted by the timer
+        causing a context switch to run the next process in the
+        ready queue.
         '''
 
         while True:
+
+            if self._stop:
+                # No more processes to execute.
+                break
+
             if self._debug:
-                print(self._registers)
-                print("Executing code at [{}]: {}".format(self._registers['pc'],
-                                                          self._ram[self._registers['pc']]))
+                # print(self._registers)
+                print("CPU {}: executing code at [{}]: {}".
+                      format(self._num, self._mmu.get_translated_addr(self._registers['pc']),
+                             self._mmu.get_val(self._registers['pc'])))
 
             # Execute the next instruction.
-            if not self.parse_instruction(self._ram[self._registers['pc']]):
-                # False means an error occurred or the program ended, so return
-                break
-            if self._debug: print(self)
+            self.parse_instruction(self._mmu.get_val(self._registers['pc']))
+
+            if self._debug:
+                print(self)
 
             # Now, check if an interrupt has been raised.  If it has, run the
             # corresponding handler.  Repeat until all interrupts have been serviced.
             self.take_interrupt_mutex()
             try:
                 if self._intr_raised:
-                    if self._debug: print("GOT INTERRUPT")
+                    if self._debug: print("CPU {}: got interrupt".format(self._num))
 
                     for addr in sorted(self._intr_addrs):
                         # Call the interrupt handler.
@@ -142,13 +172,13 @@ class CPU(threading.Thread):
 
 
     def parse_instruction(self, instr):
-        '''return False when program is done'''
 
         # Make sure it is an instruction.  The PC may have wandered into
         # data territory.
         if isinstance(instr, int):
             print("ERROR: Not an instruction: {}".format(instr))
-            return False
+            self._generate_trap(ILLEGAL_INSTRUCTION)
+            return
             
         instr = instr.replace(",", "")
         words = instr.split()
@@ -185,9 +215,11 @@ class CPU(threading.Thread):
         elif instr == 'jmp':
             self.handle_jmp(dst)
         elif instr == 'end':
-            return False
-        return True
-        
+            self._generate_trap(END_OF_PROGRAM)
+        else:
+            print("ERROR: Not an instruction: {}".format(instr))
+            self._generate_trap(ILLEGAL_INSTRUCTION)
+
 
     # TODO: do error checking in all these.
     # Could check for illegal addresses, etc.
@@ -232,7 +264,7 @@ class CPU(threading.Thread):
                 self._registers['pc'] = eval(dst)
         else:
             self._registers['pc'] += 1
-            
+
     def handle_jgz(self, src, dst):
         if not self.isregister(src):
             print("Illegal instruction")
@@ -250,7 +282,7 @@ class CPU(threading.Thread):
         RAM at the addr, which might be decimal
         or hex.'''
         addr = eval(addr[1:])
-        return self._ram[addr]
+        return self._mmu.get_val(addr)
 
     def _get_srcval(self, src):
         if self.isregister(src):
@@ -281,12 +313,12 @@ class CPU(threading.Thread):
             self._registers[dst] = srcval
         elif dst[0] == '*':    # for *<register>
             if self.isregister(dst[1:]):
-                self._ram[self._registers[dst[1:]]] = srcval
+                self._mmu.set_val(self._registers[dst[1:]], srcval)
             else:
                 print("Illegal instruction")
                 return
         else:   # assume dst holds a literal value
-            self._ram[eval(dst)] = srcval
+            self._mmu.set_val(eval(dst), srcval)
 
     def handle_add(self, src, dst):
         srcval = self._get_srcval(src)
@@ -295,14 +327,15 @@ class CPU(threading.Thread):
             self._registers[dst] += srcval
         elif dst[0] == '*':    # for *<register>
             if self.isregister(dst[1:]):
-                self._ram[self._registers[dst[1:]]] += srcval
+                currval = self._mmu.get_val(self._registers[dst[1:]])
+                self._mmu.set_val(self._registers[dst[1:]], currval + srcval)
             else:
                 print("Illegal instruction")
                 return
         else:   # assume dst holds a literal value
-            self._ram[eval(dst)] += srcval
+            currval = self._mmu.get_val(eval(dst))
+            self._mmu.set_val(eval(dst), currval + srcval)
 
-                 
     def handle_sub(self, src, dst):
         srcval = self._get_srcval(src)
 
@@ -310,29 +343,44 @@ class CPU(threading.Thread):
             self._registers[dst] -= srcval
         elif dst[0] == '*':    # for *<register>
             if self.isregister(dst[1:]):
-                self._ram[self._registers[dst[1:]]] -= srcval
+                currval = self._mmu.get_val(self._registers[dst[1:]])
+                self._mmu.set_val(self._registers[dst[1:]], currval - srcval)
             else:
                 print("Illegal instruction")
                 return
         else:   # assume dst holds a literal value
-            self._ram[eval(dst)] -= srcval
+            currval = self._mmu.get_val(eval(dst))
+            self._mmu.set_val(eval(dst), currval - srcval)
 
     def handle_call(self, fname):
         self._os.syscall(fname, self._reg0, self._reg1, self._reg2)
 
-
-    def _kbrd_isr(self):
-        # Read the value from the register in ram.
-        key = self._ram[999]
-        # Clear the data-in register
-        self._ram[999] = 0
-        print("Keyboard interrupt detected! location 999 holds", key)
+    def _generate_trap(self, reason):
+        """Generate a software interrupt -- aka a trap.
+        Store the reason for the trap in register 0."""
         
-
-    def _screen_isr(self):
-        print("Screen interrupt detected!")
+        self._registers['reg0'] = reason
+        self.take_interrupt_mutex()
+        self.add_interrupt_addr(SOFTWARE_TRAP_DEV_ID)
+        self.set_interrupt(True)
+        self.release_interrupt_mutex()
 
     def _timer_isr(self):
         '''Timer interrupt handler.  Pass control to the OS.'''
-        self._os.timer_isr()
-        
+        self._os.timer_isr(self)
+
+    def _trap_isr(self):
+        '''Software interrupt handler.  Pass control to the OS.
+        The reason for the software trap is found in register 0, so
+        pass that also as a parameter to the OS handler.'''
+        self._os.trap_isr(self, self._registers['reg0'])
+
+    def set_mmu_registers(self, reloc, limit):
+        """Set the mmu to offset logical address."""
+        self._mmu.set_reloc_register(reloc)
+        self._mmu.set_limit_register(limit)
+
+    def set_stop_cpu(self, val):
+        """Call this to stop the CPU because there are no more processes
+        to execute."""
+        self._stop = val

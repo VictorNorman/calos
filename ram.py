@@ -25,3 +25,38 @@ class RAM:
 
     def is_legal_addr(self, addr):
         return self._minAddr <= addr <= self._maxAddr
+
+
+class MMU:
+    """Memory management unit: translate logical addresses to
+    physical addresses and check memory limits."""
+
+    def __init__(self, ram):
+        self._ram = ram
+        self._reloc_register = 0
+        self._limit_register = 0
+
+    def set_reloc_register(self, base):
+        self._reloc_register = base
+
+    def set_limit_register(self, limit):
+        self._limit_register = limit
+
+    def get_val(self, addr):
+        self._check_addr(addr)
+        return self._ram[addr + self._reloc_register]
+
+    def set_val(self, addr, val):
+        self._check_addr(addr)
+        self._ram[addr + self._reloc_register] = val
+
+    def _check_addr(self, addr):
+        if addr >= self._limit_register:
+            # generate trap (software interrupt)
+            print("BAD ADDRESS!: too high")
+
+    def get_translated_addr(self, addr):
+        """Return the physical address for the given logical address"""
+        return addr + self._reloc_register
+
+

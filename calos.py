@@ -1,42 +1,34 @@
-import devices
-
+import threading
 
 DEFAULT_QUANTUM = 3   # very short -- for pedagogical reasons.
 
 class CalOS:
 
-    # Refers to the current process's PCB
-    # None means that the "idle process" is current.
-    current_proc = None
-
-    
-    def __init__(self, ram):
-        self.syscalls = { "test_syscall": self.test_syscall}
+    def __init__(self, ram, debug=False):
+        self.syscalls = { "test_syscall": self.test_syscall }
         self._ready_q = []
         self._ram = ram
         self._timer_controller = None
-        self._cpu = None
+        self._cpus = None
+        self._debug = debug
+        self._threads = []
 
-        # Create the IDLE process, with pid 0
-        self._idle_proc = PCB("IDLE", 0)
-        self.add_to_ready_q(self._idle_proc)
-        # Hard-code into RAM the IDLE process's code.  It simply jmps to its own
-        # location forever.
-        self._ram[0] = "jmp 0"
-        self._idle_proc.set_entry_point(0)
-        self._idle_proc.set_quantum(1)
-        self._idle_proc.set_memory_limits(0, 0)
+        # Refers to the current process's PCB, per CPU
+        self._current_proc = []
 
-        # Stop the OS when there are no more active processes -- processes that
-        # have not hit their "end" statement.
-        self._active_processes = 0
+    def set_cpus(self, cpus):
+        '''store a reference to the list of cpus'''
+        self._cpus = cpus
+        # Initialize the list of current_procs and threads
+        self._current_proc = [None] * len(self._cpus)
+        self._threads = [None] * len(self._cpus)
 
-    def set_cpu(self, cpu):
-        self._cpu = cpu
+    def set_debug(self, debug):
+        self._debug = debug
 
     def syscall(self, fname, val0, val1, val2):
         if not fname in self.syscalls:
-            print("ERROR: unknown system call", syscall)
+            print("ERROR: unknown system call", fname)
             return
         self.syscalls[fname](val0, val1, val2)
 
@@ -47,107 +39,142 @@ class CalOS:
         self._timer_controller = t
 
     def add_to_ready_q(self, pcb):
-        '''Add to the ready queue, and set the state of the process to READY.
-        Make sure the IDLE process is always last in the queue -- so insert before
-        it.'''
-        if pcb.get_pid() == 0:
-            # IDLE process being added to the queue -- put it at the end.
-            self._ready_q.append(pcb)
-        else:
-            if len(self._ready_q) == 0:
-                # Nothing in the ready queue, so we'll just stick this process
-                # at the end.  The current process must be the idle process.
-                assert CalOS.current_proc.get_pid() == 0
-                self._ready_q.append(pcb)
-            else:
-                # assert last item in queue is the IDLE process pcb.
-                assert self._ready_q[-1].get_pid() == 0
-                # Add pcb to 2nd-to-last slot, leaving IDLE process last.
-                self._ready_q.insert(-1, pcb)
+        '''Add pcb to the ready queue, and set the state of the process to READY.'''
         pcb.set_state(PCB.READY)
+        self._ready_q.append(pcb)
 
-        print("add_to_ready_q: queue is now:")
-        for p in self._ready_q:
-            print(p)
+        if self._debug:
+            print("add_to_ready_q: queue is now:")
+            for p in self._ready_q:
+                print("\t" + str(p))
+            print("Num ready processes = {}".format(len(self._ready_q)))
 
-    def timer_isr(self):
+    def timer_isr(self, cpu):
         '''Called when the timer expires. If there is no process in the
-        ready queue or the only process is the IDLE process, reset the timer
-        and continue.  Else, context_switch.
+        ready queue, reset the timer and continue.  Else, context_switch.
         '''
 
         if self._debug:
             print("End of quantum!")
-        # if no other processes ready or one process is ready and it is the 
-        # idle process (which should always be ready, actually).
-        if len(self._ready_q) == 0 or \
-           (len(self._ready_q) == 1 and self._ready_q[0].get_pid() == 0):
+
+        if len(self._ready_q) == 0:
             # Leave current proc in place, as running: just reset the timer.
-            self.reset_timer()
+            self.reset_timer(cpu)
             return
 
-        old_proc = CalOS.current_proc
-        new_proc = self._ready_q.pop(0)
-        assert new_proc.get_state() == PCB.READY
-        print("Switching procs from {} to {}".format(old_proc.get_name(), new_proc.get_name()))
-
-        self.context_switch(new_proc)
-
-        old_proc.set_state(PCB.READY)
-        self.add_to_ready_q(old_proc)
-        new_proc.set_state(PCB.RUNNING)
-        CalOS.current_proc = new_proc
+        self.context_switch(cpu)
 
         # reset the timer (to the quantum of the (new) current_proc).
-        self.reset_timer()
-    
+        self.reset_timer(cpu)
 
-    def context_switch(self, new_proc):
-        '''Do a context switch between the current_proc and the given new_proc, by
-        just saving the registers of the current_proc in its PCB and loading the registers
-        of the new_proc from its PCB.
-        NOTE: does not support recursion!
-        NOTE: does not change the state of either proc.
-        NOTE: does not change current_proc
+
+    def trap_isr(self, cpu, reason):
+        '''Called when a software trap has been generated. The reason is
+        passed in.'''
+
+        # NOTE: no need to save registers to current_proc because
+        # at this point, if we get a trap, we won't be starting that
+        # process again -- it is done, normally or due to error.
+
+        import cpu as cpumodule
+        if reason == cpumodule.END_OF_PROGRAM:
+            print("PROGRAM ENDED NORMALLY")
+        elif reason == cpumodule.ILLEGAL_ADDRESS:
+            print("BAD ADDRESS: ENDING PROGRAM")
+        elif reason == cpumodule.ILLEGAL_INSTRUCTION:
+            print("BAD INSTRUCTION: ENDING PROGRAM")
+
+        # Program ended.  Context switch to first process
+        # in the ready queue, if available.
+        if len(self._ready_q) > 0:
+            self._assign_proc_to_cpu(cpu)
+        else:
+            # No more processes to run, so stop the CPU.
+            cpu.set_stop_cpu(True)
+
+
+    def context_switch(self, cpu):
+        '''Do a context switch between the current_proc and the process
+        on the front of the ready_q.
         '''
 
-        old = CalOS.current_proc
-        old.set_registers(self._cpu.get_registers())
-        self._cpu.set_registers(new_proc.get_registers())
+        # TODO: merge this code with _assign_proc_to_cpu()
+        old_proc = self._current_proc[cpu.get_num()]
+        new_proc = self._ready_q.pop(0)
+        assert new_proc.get_state() == PCB.READY
+        if self._debug:
+            print("Switching procs from {} to {}".format(old_proc.get_name(), new_proc.get_name()))
 
-    def reset_timer(self):
+        # squirrel away the registers in the pcb
+        old_proc.set_registers(cpu.get_registers())
+        cpu.set_registers(new_proc.get_registers())
+        cpu.set_mmu_registers(new_proc.get_low_mem(),
+                              new_proc.get_high_mem() - new_proc.get_low_mem())
+
+        self.add_to_ready_q(old_proc)
+        new_proc.set_state(PCB.RUNNING)
+        self._current_proc[cpu.get_num()] = new_proc
+
+    def reset_timer(self, cpu):
         '''Reset the timer's countdown to the value in the current_proc's
         PCB.'''
-        self._timer_controller.set_countdown(CalOS.current_proc.get_quantum())
-        
+        cpu.reset_timer(self._current_proc[cpu.get_num()].get_quantum())
 
-    def run(self, cpu):
-        '''Startup the timer controller and execute processes in the ready
-        queue on the given cpu -- i.e., run the operating system!
-        '''
+    def run(self):
+        '''Execute processes in the ready queue on all cpus --
+        i.e., run the operating system!'''
 
-        self._active_processes = len(self._ready_q) - 1 # don't count IDLE proc
+        if self._debug:
+            print("Calos.run() ready processes = {}".format(len(self._ready_q)))
 
-        # To get things going, have to set the timer to the quantum of
-        # the soon-to-be first process, before starting the controller.
-        CalOS.current_proc = self._ready_q[0]
-        self.reset_timer()
-        self._timer_controller.start()
+        # Create a thread for each CPU.
+        # For each cpu:
+        #    dequeue the first process from the ready queue, and set up the CPU
+        #    to run it.
+        # Start each thread.
+        # Join all threads.
 
-        while self._active_processes > 0:
-            CalOS.current_proc = self._ready_q.pop(0)
-            CalOS.current_proc.set_state(PCB.RUNNING)
-            self.reset_timer()
-            self._cpu.set_registers(CalOS.current_proc.get_registers())
+        for idx in range(len(self._cpus)):
+            if len(self._ready_q) == 0:
+                break
+            cpu = self._cpus[idx]
+            self._threads[idx] = threading.Thread(target=cpu.run_cpu)
 
-            print("Running", CalOS.current_proc)
+            self._assign_proc_to_cpu(cpu)
+            cpu.set_stop_cpu(False)   # power up the CPU.
 
-            cpu.run_process()
+            if self._debug:
+                print("Running", self._current_proc[cpu.get_num()])
 
-            CalOS.current_proc.set_state(PCB.DONE)
-            print("Done running", CalOS.current_proc)
-            self._active_processes -= 1
+        # Start all the CPUs
+        for t in self._threads:
+            if t is not None:
+                t.start()
 
+        # Wait for all CPUs to be done, which is when *all* processes are done.
+        for idx in range(len(self._cpus)):
+            cpu = self._cpus[idx]
+            if self._threads[idx] is None:
+                continue
+            self._threads[idx].join()
+            if self._debug:
+                print("CalOS.run(): done with", cpu)
+
+            # TODO: move this to isr where end is handled.  Maybe.
+            self._current_proc[cpu.get_num()].set_state(PCB.DONE)
+
+            if self._debug:
+                print("Done running {}, num ready_processes now {}".
+                      format(self._current_proc[cpu.get_num()], len(self._ready_q)))
+
+    def _assign_proc_to_cpu(self, cpu):
+        new_proc = self._ready_q.pop(0)
+        self._current_proc[cpu.get_num()] = new_proc
+        self.reset_timer(cpu)
+        cpu.set_registers(new_proc.get_registers())
+        cpu.set_mmu_registers(new_proc.get_low_mem(),
+                              new_proc.get_high_mem() - new_proc.get_low_mem())
+        new_proc.set_state(PCB.RUNNING)
 
 class PCB:
     '''Process control block'''
@@ -169,6 +196,10 @@ class PCB:
             self._pid = pid
 
         self._entry_point = None
+
+        # These addresses define the limits of the memory assigned for this process.
+        # The mem_low also represents the offset used for translation of logical
+        # addresses in code to physical addresses in RAM.
         self._mem_low = None
         self._mem_high = None
         self._state = PCB.NEW
@@ -191,9 +222,17 @@ class PCB:
     def get_entry_point(self):
         return self._entry_point
 
-    def set_memory_limits(self, low, high):
+    def set_low_mem(self, low):
         self._mem_low = low
+
+    def set_high_mem(self, high):
         self._mem_high = high
+
+    def get_low_mem(self):
+        return self._mem_low
+
+    def get_high_mem(self):
+        return self._mem_high
 
     def set_state(self, st):
         assert st in self.LEGAL_STATES
@@ -203,15 +242,15 @@ class PCB:
         return self._state
 
     def set_registers(self, registers):
-        '''make a copy of the dictionary being passed in, so that we
-        don't have multiple references to it.'''
+        # Make a copy of the register dictionary being passed in. We don't want aliasing here.
         self._registers = dict(registers)
-                
+        
     def get_registers(self):
         return self._registers
 
     def get_quantum(self):
         return self._quantum
+
     def set_quantum(self, q):
         self._quantum = q
 
@@ -222,6 +261,7 @@ class PCB:
         return self._name
 
     def __str__(self):
-        return "PCB({}): {}, state {}, entrypoint {}".format(self._pid, self._name, self._state,
-                                                             self._entry_point)
+        return "PCB({}): {}, state {}, entrypoint {}, mem {}-{}".\
+            format(self._pid, self._name, self._state, self._entry_point,
+                   self._mem_low, self._mem_high)
     
