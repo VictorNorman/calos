@@ -86,11 +86,12 @@ class Monitor:
                 print("L <addr> <tapename>: load a program from tape to bytes starting at addr")
                 print("W <start> <end> <tapename>: write bytes from start to end to tape")
                 print("R : Start up OS and execute ready queue")
+                print("Q : Leave the OS")
                 print("! : Toggle debugging on or off -- off at startup.")
                 continue
 
-            # Remove all commas, just in case, and upper-case the command
-            instr = instr.replace(",", "").upper()
+            # Remove all commas, just in case
+            instr = instr.replace(",", "")
             
             # 0 argument cases
             numargs = len(instr.split())
@@ -104,16 +105,22 @@ class Monitor:
                 self._three_arg_instr(instr)
             else:
                 print("Unknown or badly formatted instruction: too many arguments")
-                    
+
     def _zero_arg_instr(self, instr):
+        # Uppercase to not worry about user input being in any case
+        instr = instr.upper()
         if instr.startswith("!"):
             self.set_debug(not self._debug)
         elif instr.startswith("R"):
             self._os.run()
+        elif instr.startswith("Q"):
+            # TODO: make this involve giving up the lock from the CPU
+            exit()
         else:
             print("Unknown command")
 
     def _one_arg_instr(self, instr):
+        instr = instr.upper()
         try:
             arg1 = eval(instr.split()[1])
         except:
@@ -129,7 +136,8 @@ class Monitor:
             print("Unknown command")
 
     def _two_arg_instr(self, instr):
-        if instr.startswith('S '):
+        # upper()'s done in the condition only to preserve tapename for Load
+        if instr.upper().startswith('S '):
             try:
                 startaddr = eval(instr.split()[1])
                 endaddr = eval(instr.split()[2])
@@ -137,7 +145,7 @@ class Monitor:
             except:
                 print("Illegal format")
 
-        elif instr.startswith('L '):
+        elif instr.upper().startswith('L '):
             try:
                 startaddr = eval(instr.split()[1])
                 tapename = instr.split()[2]
@@ -149,7 +157,7 @@ class Monitor:
 
 
     def _three_arg_instr(self, instr):
-        if instr.startswith('W '):
+        if instr.upper().startswith('W '):
             try:
                 startaddr = eval(instr.split()[1])
                 endaddr = eval(instr.split()[2])
@@ -197,6 +205,17 @@ class Monitor:
                         self._handle_main_label(addr, line, pcb)
                     elif line.startswith("__data:"):
                         self._handle_data_label(addr, line, pcb)
+                    elif line.startswith("db "): # define all the specified bytes in ram
+
+                        # figure out what to define
+                        bytes = eval(line.split()[1])
+                        self._handle_db(addr, bytes)
+
+                        # move address head forward the respective number of bytes
+                        if type(bytes) == str:
+                            addr += len(bytes)
+                        else: addr += 1
+
                     else:   # the line is regular code: store it in ram
                         self._ram[addr] = line
                         addr += 1
@@ -236,6 +255,12 @@ class Monitor:
         if self._debug:
             print("__data found at physical location", addr, "with size", num_bytes)
             print("high memory limit set at", addr + num_bytes)
+
+    def _handle_db(self, addr, bytes):
+        offset = 0
+        for byte in bytes:
+            self._ram[addr + offset] = byte
+            offset += 1
 
     def _write_program(self, startaddr, endaddr, tapename):
         '''Write memory from startaddr to endaddr to tape (a file).'''

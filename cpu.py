@@ -189,6 +189,7 @@ class CPU:
             src = words[1]
             dst = words[2]
 
+        # TODO: rename to int(errupt) or trap? CPU doesn't care about system services...
         if instr == "call":
             # Call a python function.  Syntax is
             # call fname.  Function fname is a method in 
@@ -290,9 +291,19 @@ class CPU:
         elif src[0] == '*':
             return self._get_value_at(src)
         else:   # assume src holds a literal value
-            return eval(src)    # handles decimal and hex values.
-            # TODO: does the above handle putting strings in memory too?  It should
-            # allow single characters, perhaps.
+            
+            # evaluate src to get more info
+            src = eval(src)
+            if type(src) != str:
+                # if src is numeric
+                return src
+            
+            # if src is a string
+            if len(src) > 1:
+                raise ValueError("Memory cannot hold strings")
+            
+            # if src is just one character
+            return src
 
 
     def handle_mov(self, src, dst):
@@ -353,7 +364,24 @@ class CPU:
             self._mmu.set_val(eval(dst), currval - srcval)
 
     def handle_call(self, fname):
-        self._os.syscall(fname, self._reg0, self._reg1, self._reg2)
+        '''Interrupt and let OS take over to handle a system call
+        
+        Extra information is provided along with the info in reg0,
+          namely the CPU num, for the OS to figure out what PCB it's looking at
+        
+        This is accomplished by bit shifting the value in reg0 right by 4 bits
+          4 bits of information is enough space to distinguish 16 CPUs
+
+        Then the CPU id is added to the shifted value, putting it in the least significant 4 bits
+
+        Thus the OS can figure out both the CPU id and reg0 value with this operation
+          CPU id = value_in_reg0 & 0x0F
+          reg0_original_value = value_in_reg0 >> 4
+        
+        Example in calos.system_write()
+        '''
+        reg0_value = (self._registers["reg0"] << 4) + self._num
+        self._os.syscall(fname, reg0_value, self._registers["reg1"], self._registers["reg2"])
 
     def _generate_trap(self, reason):
         """Generate a software interrupt -- aka a trap.

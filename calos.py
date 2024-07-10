@@ -1,11 +1,12 @@
 import threading
+from sys import stderr, stdin, stdout
 
 DEFAULT_QUANTUM = 3   # very short -- for pedagogical reasons.
 
 class CalOS:
 
     def __init__(self, ram, debug=False):
-        self.syscalls = { "test_syscall": self.test_syscall }
+        self.syscalls = { "test_syscall": self.test_syscall, "write": self.system_write }
         self._ready_q = []
         self._ram = ram
         self._timer_controller = None
@@ -15,6 +16,8 @@ class CalOS:
 
         # Refers to the current process's PCB, per CPU
         self._current_proc = []
+
+        self.file_descriptors = {0:stdin, 1:stdout, 2:stderr}
 
     def set_cpus(self, cpus):
         '''store a reference to the list of cpus'''
@@ -27,13 +30,33 @@ class CalOS:
         self._debug = debug
 
     def syscall(self, fname, val0, val1, val2):
-        if not fname in self.syscalls:
+        if fname not in self.syscalls:
             print("ERROR: unknown system call", fname)
             return
         self.syscalls[fname](val0, val1, val2)
 
     def test_syscall(self, val0, val1, val2):
         print("Test system call called!")
+
+    def system_write(self, val0, val1, val2):
+        '''
+        val0: what to write
+        val1: file_descriptor num to write to
+            1 - stdin, 2 - stdout, 3 - stderr
+        val2: how many bytes to write
+        '''
+        cpu_id = val0 & 0x0F
+        val0 = val0 >> 4
+
+        self._current_proc[cpu_id].set_state('WAITING')
+
+        val0 += self._current_proc[cpu_id].get_low_mem()
+        for offset in range(val2):
+            print(self._ram[val0 + offset], file=self.file_descriptors[val1], end="")
+            # TODO: could add a delay because printing out is so slow
+            # could be configurable for how slow is slow
+        
+        self._current_proc[cpu_id].set_state('READY')
 
     def set_timer_controller(self, t):
         self._timer_controller = t
