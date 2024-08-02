@@ -44,15 +44,6 @@ class CalCListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by CalCParser#var_definition.
-    def enterVar_definition(self, ctx:CalCParser.Var_definitionContext):
-        pass
-
-    # Exit a parse tree produced by CalCParser#var_definition.
-    def exitVar_definition(self, ctx:CalCParser.Var_definitionContext):
-        pass
-
-
     # Enter a parse tree produced by CalCParser#lit.
     def enterLit(self, ctx:CalCParser.LitContext):
         pass
@@ -107,12 +98,39 @@ class CalCListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by CalCParser#expression.
-    def enterExpression(self, ctx:CalCParser.ExpressionContext):
+    # Enter a parse tree produced by CalCParser#binary_op.
+    def enterBinary_op(self, ctx:CalCParser.Binary_opContext):
         pass
 
-    # Exit a parse tree produced by CalCParser#expression.
-    def exitExpression(self, ctx:CalCParser.ExpressionContext):
+    # Exit a parse tree produced by CalCParser#binary_op.
+    def exitBinary_op(self, ctx:CalCParser.Binary_opContext):
+        pass
+
+
+    # Enter a parse tree produced by CalCParser#add_op.
+    def enterAdd_op(self, ctx:CalCParser.Add_opContext):
+        pass
+
+    # Exit a parse tree produced by CalCParser#add_op.
+    def exitAdd_op(self, ctx:CalCParser.Add_opContext):
+        pass
+
+
+    # Enter a parse tree produced by CalCParser#mult_op.
+    def enterMult_op(self, ctx:CalCParser.Mult_opContext):
+        pass
+
+    # Exit a parse tree produced by CalCParser#mult_op.
+    def exitMult_op(self, ctx:CalCParser.Mult_opContext):
+        pass
+
+
+    # Enter a parse tree produced by CalCParser#operand.
+    def enterOperand(self, ctx:CalCParser.OperandContext):
+        pass
+
+    # Exit a parse tree produced by CalCParser#operand.
+    def exitOperand(self, ctx:CalCParser.OperandContext):
         pass
 
 

@@ -4,11 +4,9 @@ program : declaration* EOF;
 
 declaration : (var_declaration | func_declaration) ;
 
-var_declaration : symbol_type ID var_definition? ';' ;
+var_declaration : symbol_type (ID | assignment) ';' ;
 
-symbol_type : ID '*'* ;
-
-var_definition : '=' expression ;
+symbol_type : ID | PTR ;
 
 lit : INT_LIT | FLOAT_LIT | CHAR_LIT | BOOL_LIT ;
 
@@ -21,26 +19,38 @@ func_definition : statement | block ;
 block : '{' statement* '}' ;
 
 statement
-    : expression ';'
-    | declaration
+    : binary_op ';'
+    | assignment ';'
+    | var_declaration
     | if_statement
     | while_statement
     ;
+    
+binary_op
+    : add_op
+    ;
 
-expression
+add_op
+    : mult_op
+    | add_op ADD_OP mult_op
+    ;
+
+mult_op
+    : operand
+    | mult_op MULT_OP binary_op
+    ;
+
+operand
     : lit
     | ID
-    | assignment
-    | expression OP expression
     | func_call
-    | var_declaration
     ;
     
-assignment : ID '=' expression ;
+assignment : ID '=' (binary_op | assignment) ;
 
-if_statement : 'if' '(' expression ')' (statement | block) ;
+if_statement : 'if' '(' binary_op ')' (statement | block) ;
 
-while_statement : 'while' '(' expression ')' (statement | block) ;
+while_statement : 'while' '(' binary_op ')' (statement | block) ;
 
 func_call : ID '(' arg* ')' ;
 
@@ -53,7 +63,11 @@ FLOAT_LIT : [_0-9]+ '.' [_0-9]+ ;
 CHAR_LIT : '\'' [a-zA-Z] '\'' ;
 BOOL_LIT : 'true' | 'false' ;
 
-OP : '+' | '-' | '*' | '/' ;
+PTR : ID '*'+ ;
+
+MULT_OP : '*' | '/' ;
+
+ADD_OP : '+' | '-' ;
 
 ID : [_a-zA-Z][_a-zA-Z0-9]* ;
 

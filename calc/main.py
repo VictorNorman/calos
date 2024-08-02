@@ -1,3 +1,5 @@
+#!/bin/python3
+
 from antlr4 import *
 from CalCLexer import CalCLexer
 from CalCParser import CalCParser
@@ -6,7 +8,7 @@ from CalCWalker import CalCWalker
 from sys import argv
 
 if len(argv) != 2:
-    print("\n\tUse is main.py <source code path>\n")
+    print(f"\n\tUse is {argv[0]} <source code path>\n")
     exit()
 
 source = argv[1]

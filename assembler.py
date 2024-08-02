@@ -12,7 +12,7 @@ class Assembler:
     # singleton tracker
     instance = None
 
-    # this defines keywords directives as starting with double underscore
+    # this defines keyword directives as starting with double underscore
     label_pattern = re.compile(r"\s*([^__]\w+):\s*")
     comment_pattern = re.compile(r"(\s*#.*)", re.DOTALL)
 
