@@ -61,4 +61,4 @@ More instructions:
 11: end
 ```
 
-Note that CalOS does use virutal addressing.
+> ⓘ Note that CalOS *does* use virutal addressing. The true memory locations used above will be dependent on the address space of the program.
