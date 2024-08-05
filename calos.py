@@ -1,5 +1,7 @@
 import threading
 from sys import stderr, stdin, stdout
+from drivers.keyboardDriver import KeyboardDriver
+from cpu import CPU
 
 DEFAULT_QUANTUM = 3   # very short -- for pedagogical reasons.
 
@@ -10,21 +12,35 @@ class CalOS:
         self._ready_q = []
         self._ram = ram
         self._timer_controller = None
-        self._cpus = None
+        self._cpus: list[CPU] = None
+        self._data_ports = None
         self._debug = debug
         self._threads = []
 
         # Refers to the current process's PCB, per CPU
         self._current_proc = []
 
-        self.file_descriptors = {0:stdin, 1:stdout, 2:stderr}
+        self.file_descriptors = [stdin, stdout, stderr]
 
-    def set_cpus(self, cpus):
+        self.interrupt_table = [self.trap_isr,
+                                self.timer_isr,
+                                self.kybd_isr]
+
+        self.devices = [KeyboardDriver]
+
+    def set_cpus(self, cpus: list[CPU]):
         '''store a reference to the list of cpus'''
         self._cpus = cpus
         # Initialize the list of current_procs and threads
         self._current_proc = [None] * len(self._cpus)
         self._threads = [None] * len(self._cpus)
+    
+    def set_data_ports(self, data_ports: list):
+        '''store a reference to the list of data ports for device io
+        Timer is always at port 0
+        Keyboard is always at port 1
+        '''
+        self._data_ports = data_ports
 
     def set_debug(self, debug):
         self._debug = debug
@@ -90,8 +106,7 @@ class CalOS:
         # reset the timer (to the quantum of the (new) current_proc).
         self.reset_timer(cpu)
 
-
-    def trap_isr(self, cpu, reason):
+    def trap_isr(self, cpu: CPU):
         '''Called when a software trap has been generated. The reason is
         passed in.'''
 
@@ -99,12 +114,13 @@ class CalOS:
         # at this point, if we get a trap, we won't be starting that
         # process again -- it is done, normally or due to error.
 
+        # reg0 is where a reason is expected
         import cpu as cpumodule
-        if reason == cpumodule.END_OF_PROGRAM:
+        if cpu._registers['reg0'] == cpumodule.END_OF_PROGRAM:
             print("PROGRAM ENDED NORMALLY")
-        elif reason == cpumodule.ILLEGAL_ADDRESS:
+        elif cpu._registers['reg0'] == cpumodule.ILLEGAL_ADDRESS:
             print("BAD ADDRESS: ENDING PROGRAM")
-        elif reason == cpumodule.ILLEGAL_INSTRUCTION:
+        elif cpu._registers['reg0'] == cpumodule.ILLEGAL_INSTRUCTION:
             print("BAD INSTRUCTION: ENDING PROGRAM")
 
         # Program ended.  Context switch to first process
@@ -114,7 +130,9 @@ class CalOS:
         else:
             # No more processes to run, so stop the CPU.
             cpu.set_stop_cpu(True)
-
+    
+    def kybd_isr(self, cpu):
+        self.devices[0].write(self._data_ports[1].io_port)
 
     def context_switch(self, cpu):
         '''Do a context switch between the current_proc and the process

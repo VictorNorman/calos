@@ -1,26 +1,21 @@
 import time
 import threading   # for CPU
+from calos import CalOS
+from main import SOFTWARE_TRAP_DEV_ID
 
 MAX_CHARS_PER_ADDR = 4
 
 # Time to delay between executing instructions, in seconds.
 DELAY_BETWEEN_INSTRUCTIONS = 0.2
 
-# Interrrupt device ids
-SOFTWARE_TRAP_DEV_ID = 0
-TIMER_DEV_ID  = 1
-# KBRD_DEV_ID   = 1
-# SCREEN_DEV_ID = 2
-
 # REASONs for software traps.
 END_OF_PROGRAM = 0
 ILLEGAL_ADDRESS = 1
 ILLEGAL_INSTRUCTION = 2
 
-
 class CPU:
 
-    def __init__(self, ram, os, num=0):
+    def __init__(self, ram, os: CalOS, num=0):
 
         # TODO: the CPU should know nothing about the OS.  The CPU should
         # just execute instructions and handle the interrupts.  We should
@@ -38,23 +33,8 @@ class CPU:
         self._stop = False
 
         self._intr_raised = False
-        self._intr_addrs = set()
-
-        self._intr_lock = threading.Lock()
-        
-        self._intr_vector = [self._trap_isr,
-                             self._timer_isr]
-
-        # Create device controller threads.
-        # This is done here so that when the CPU is done running a program,
-        # the screen and kbd threads can be killed.  Then if it is told
-        # to start up again, it will create new threads (since you cannot
-        # restart stopped threads).
-        # TODO: revisit the above decision?  CPU thread is not stopped anymore...
-        # Also, not using the Keyboard and Screen devices...
-        # And, it seems weird for the CPU to start up the other device controllers...
-        import devices
-        self._timer = devices.TimerController(self, TIMER_DEV_ID, self._debug)
+        self._intr_addrs = set()        
+        self._intr_vector = os.interrupt_table
 
         # Create MMU.
         from ram import MMU
@@ -75,24 +55,6 @@ class CPU:
     def set_debug(self, debug):
         self._debug = debug
         self._timer.set_debug(debug)
-
-    def take_interrupt_mutex(self):
-        self._intr_lock.acquire()
-
-    def release_interrupt_mutex(self):
-        self._intr_lock.release()
-
-    def set_interrupt(self, intr_val):
-        '''Set the interrupt line to be True if an interrupt is raised, or
-        False to indicate the interrupt is cleared.
-        '''
-        assert isinstance(intr_val, bool)
-        self._intr_raised = intr_val
-
-    def add_interrupt_addr(self, addr):
-        '''Add the device bus address to the set of devices that have
-        raised an interrupt.'''
-        self._intr_addrs.add(addr)
 
     def get_registers(self):
         return self._registers
@@ -159,7 +121,7 @@ class CPU:
 
                     for addr in sorted(self._intr_addrs):
                         # Call the interrupt handler.
-                        self._intr_vector[addr]()
+                        self._intr_vector[addr](self)
                         # Remove the device address from the list of pending interrupts.
                         self._intr_addrs.remove(addr)
                     
@@ -392,16 +354,6 @@ class CPU:
         self.add_interrupt_addr(SOFTWARE_TRAP_DEV_ID)
         self.set_interrupt(True)
         self.release_interrupt_mutex()
-
-    def _timer_isr(self):
-        '''Timer interrupt handler.  Pass control to the OS.'''
-        self._os.timer_isr(self)
-
-    def _trap_isr(self):
-        '''Software interrupt handler.  Pass control to the OS.
-        The reason for the software trap is found in register 0, so
-        pass that also as a parameter to the OS handler.'''
-        self._os.trap_isr(self, self._registers['reg0'])
 
     def set_mmu_registers(self, reloc, limit):
         """Set the mmu to offset logical address."""

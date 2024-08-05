@@ -1,59 +1,29 @@
+##########################
+# main.py handles all the set up for CalOS -
+# everything needed get the OS to a running state
+# bios/uefi, bootloader, and hardware initialization
+# that would happen through those.
+# Then it runs the OS and allows user interaction
+#
+# Run with 'python3 main.py'
+######################
 import calos
 from cpu import CPU, MAX_CHARS_PER_ADDR
+from apic import LAPIC, IOAPIC
 from ram import RAM
+from dev.keyboard import KeyboardController
+from dev.timer import TimerController
 
+###### Settings
+NUMBER_OF_CORES = 2
+RAM_SIZE = 1024
 
-'''
-Architecture Description:
-There are 3 registers, reg0, reg1, reg2, and a program counter
-register, pc.
-
-There are 1024 words of RAM, from addresses 0 to 1023.  The number
-of bits/bytes in a word is not defined:
-o Any positive or negative number fits in a word.
-o Every instruction, including arguments, fits in a word.
-o A string of up to 4 characters fits in a word: this is
-  indicated by surrounding the string with single quotes.
-
-
-Assembly Language Instructions:
-mov <src> <dst>   move value from <src> to <dst>
-add <val> <dst>   add value to <dst>
-sub <val> <dst>   sub value from <dst>
-
-<src> and <dst> can be a register name, a <value>, or *<value>.
-*<src> means the contents of RAM at the address <src>.
-*<reg> means the contents of RAM at the location referenced by reg.
-You cannot move values from one RAM location to another.
-<value> can be given in decimal or hexidecimal.
-<val> can be a literal value or a register name.
-
-jmp <dst> means change pc to <dst>.
-jez <reg> <dst> means change pc to <dst> if register <reg> is 0.
-jnz <reg> <dst> means change pc to <dst> if register <reg> is not 0.
-jgz <reg> : > 0
-jlz <reg> : < 0
-
-end  means end the program
-
-Sample program: multiply values in addresses 0 and 1, leaving
-result in location 2.
-
-20: mov 0 4	     # put 0 into the destination in case val1 or val2 are 0.
-21: mov *0 reg2      # move 1st value to reg2
-22: jez reg2 31      # we are done if val1 is 0
-23: mov *1 reg1      # move 2nd value to reg1
-24: jez reg1 31      # we are done if val2 is 0
-25: mov reg2 reg0    # copy reg2 to reg0
-26: sub 1 reg1       # loop: subtract 1 from val2
-27: jez reg1 30      # if == 0, we are done looping
-28: add reg0 reg2    # add reg0 to reg2  where we accumulate result
-29: jmp 26           # repeat the loop
-30: mov reg2 2       # store result in location 2
-31: end
-
-'''
-
+# Interrrupt device ids
+SOFTWARE_TRAP_DEV_ID = 0
+TIMER_DEV_ID  = 1
+KYBD_DEV_ID   = 2
+SCREEN_DEV_ID = 3
+###### End Settings
 
 class Monitor:
     def __init__(self, ram):
@@ -61,9 +31,20 @@ class Monitor:
         self._ram = ram
 
         self._os = calos.CalOS(ram)
-        # may have to become a list of cores
-        self._cpus = [ CPU(self._ram, self._os, 0) , CPU(self._ram, self._os, 1) ]
+        
+        # set up cores with local interrupt controllers
+        self._cpus = [CPU(self._ram, self._os, cpu_id) for cpu_id in range(NUMBER_OF_CORES)]
+        self._lapics = [LAPIC(self._cpus[i]) for i in range(NUMBER_OF_CORES)]
         self._os.set_cpus(self._cpus)
+
+        # set up the IO interrupt controller
+        self._io_apic = IOAPIC(self._lapics)
+
+        # set up peripherals
+        self._timer = TimerController(self._io_apic, TIMER_DEV_ID, self._debug)
+        self._kybd = KeyboardController(self._io_apic, KYBD_DEV_ID, self._debug)
+        self._os.set_data_ports([self._timer, self._kybd])
+
         self.set_debug(False)
 
     def run(self):
@@ -344,8 +325,8 @@ class Monitor:
             curr_addr += 1
         
 # Main
-ram = RAM()
+ram = RAM(RAM_SIZE)
 
 # Like BIOS
-monitor = Monitor(ram) 
+monitor = Monitor(ram)
 monitor.run()

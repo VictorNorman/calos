@@ -1,20 +1,20 @@
-'''Devices that interact with the CPU: I/O ports, timer, etc.'''
-
 import threading
 import time
+from apic import IOAPIC
 
 class TimerController(threading.Thread):
     '''This controller controls a timer device that interrupts the
     CPU whenever the timer runs down to 0.  A countdown value of -1
     means the timer is not running.
     '''
-    import cpu
+    import cpu as cpu
     DELAY = cpu.DELAY_BETWEEN_INSTRUCTIONS
     NOT_RUNNING = -1
 
-    def __init__(self, cpu, dev_id, debug=False):
+    def __init__(self, io_apic: IOAPIC, dev_id, debug=False):
         threading.Thread.__init__(self)
-        self._cpu = cpu
+
+        self._io_apic = io_apic # interrupt handler
 
         # Bus address identifier: used to indicate to the CPU
         # what device has raised an interrupt.
@@ -53,10 +53,9 @@ class TimerController(threading.Thread):
                 countdown -= 1
             if countdown == 0:
                 # timer expired!
-                self._cpu.take_interrupt_mutex()
-                self._cpu.add_interrupt_addr(self._dev_id)
-                self._cpu.set_interrupt(True)
-                self._cpu.release_interrupt_mutex()
+                self._io_apic.take_interrupt_mutex()
+                self._io_apic.interrupt(self._dev_id)
+                self._io_apic.release_interrupt_mutex()
                 # Don't generate another interrupt until the
                 # previous one is handled and the interrupt is
                 # reset.

@@ -47,18 +47,18 @@ More instructions:
 #### Multiply Values in Addresses 0 and 1, Leaving Result in Location 2
 
 ```assembly
-0: mov 0 4          # put 0 into the destination in case val1 or val2 are 0.
-1: mov *0 reg2      # move 1st value to reg2
-2: jez reg2 31      # we are done if val1 is 0
-3: mov *1 reg1      # move 2nd value to reg1
-4: jez reg1 31      # we are done if val2 is 0
-5: mov reg2 reg0    # copy reg2 to reg0
-6: sub 1 reg1       # loop: subtract 1 from val2
-7: jez reg1 30      # if == 0, we are done looping
-8: add reg0 reg2    # add reg0 to reg2  where we accumulate result
-9: jmp 26           # repeat the loop
-10: mov reg2 2       # store result in location 2
-11: end
+mov 0 4          /* put 0 into the destination in case val1 or val2 are 0. */
+mov *0 reg2      /* move 1st value to reg2 */
+jez reg2 31      /* we are done if val1 is 0 */
+mov *1 reg1      /* move 2nd value to reg1 */
+jez reg1 31      /* we are done if val2 is 0 */
+mov reg2 reg0    /* copy reg2 to reg0 */
+sub 1 reg1       /* loop: subtract 1 from val2 */
+jez reg1 30      /* if == 0, we are done looping */
+add reg0 reg2    /* add reg0 to reg2  where we accumulate result */
+jmp 26           /* repeat the loop */
+mov reg2 2      /* store result in location 2 */
+end
 ```
 
 > ⓘ Note that CalOS *does* use virutal addressing. The true memory locations used above will be dependent on the address space of the program.
